@@ -117,7 +117,7 @@ if(LVK_WITH_SAMPLES)
   include_directories("third-party/deps/src/stb")
   include_directories("third-party/deps/src/taskflow")
   include_directories("third-party/deps/src/3D-Graphics-Rendering-Cookbook")
-  if(WIN32 OR (UNIX AND NOT APPLE AND NOT ANDROID))
+  if(WIN32 OR (UNIX AND NOT ANDROID))
     # cmake-format: off
     set(GLFW_BUILD_DOCS     OFF CACHE BOOL "")
     set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "")

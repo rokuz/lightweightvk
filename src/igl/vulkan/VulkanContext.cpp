@@ -1041,6 +1041,9 @@ void VulkanContext::createInstance() {
     VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
 #elif defined(__linux__)
     VK_KHR_XLIB_SURFACE_EXTENSION_NAME,
+#elif defined(__APPLE__)
+    VK_MVK_MACOS_SURFACE_EXTENSION_NAME,
+    VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME,
 #endif
     VK_EXT_VALIDATION_FEATURES_EXTENSION_NAME // enabled only for validation
   };
@@ -1068,13 +1071,21 @@ void VulkanContext::createInstance() {
       .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
       .pEngineName = "IGL/Vulkan",
       .engineVersion = VK_MAKE_VERSION(1, 0, 0),
+#ifndef __APPLE__
       .apiVersion = VK_API_VERSION_1_3,
+#else
+      .apiVersion = VK_API_VERSION_1_2,
+#endif
   };
 
+  VkInstanceCreateFlags flags = 0;
+#if defined(__APPLE__)
+  flags |= VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#endif
   const VkInstanceCreateInfo ci = {
       .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
       .pNext = config_.enableValidation ? &features : nullptr,
-      .flags = 0,
+      .flags = flags,
       .pApplicationInfo = &appInfo,
       .enabledLayerCount = config_.enableValidation ? (uint32_t)LVK_ARRAY_NUM_ELEMENTS(kDefaultValidationLayers) : 0,
       .ppEnabledLayerNames = config_.enableValidation ? kDefaultValidationLayers : nullptr,
@@ -1133,6 +1144,13 @@ void VulkanContext::createSurface(void* window, void* display) {
       .window = (Window)window,
   };
   VK_ASSERT(vkCreateXlibSurfaceKHR(vkInstance_, &ci, nullptr, &vkSurface_));
+#elif defined(VK_USE_PLATFORM_MACOS_MVK)
+  const VkMacOSSurfaceCreateInfoMVK ci = {
+      .sType = VK_STRUCTURE_TYPE_MACOS_SURFACE_CREATE_INFO_MVK,
+      .flags = 0,
+      .pView = window,
+  };
+  VK_ASSERT(vkCreateMacOSSurfaceMVK(vkInstance_, &ci, nullptr, &vkSurface_));
 #else
 #error Implement for other platforms
 #endif
@@ -1262,10 +1280,17 @@ lvk::Result VulkanContext::initContext(const HWDeviceDesc& desc) {
 #if defined(LVK_WITH_TRACY)
     VK_EXT_CALIBRATED_TIMESTAMPS_EXTENSION_NAME,
 #endif
+#if defined(__APPLE__)
+    VK_EXT_SUBGROUP_SIZE_CONTROL_EXTENSION_NAME,
+    VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME,
+    "VK_KHR_portability_subset",
+#endif
   };
 
   VkPhysicalDeviceFeatures deviceFeatures10 = {
+#ifndef __APPLE__
       .geometryShader = VK_TRUE,
+#endif
       .multiDrawIndirect = VK_TRUE,
       .drawIndirectFirstInstance = VK_TRUE,
       .depthBiasClamp = VK_TRUE,
@@ -1476,8 +1501,11 @@ lvk::Result VulkanContext::initContext(const HWDeviceDesc& desc) {
 #undef CHECK_FEATURE_1_3
     if (!missingFeatures.empty()) {
       MINILOG_LOG_PROC(minilog::FatalError, "Missing Vulkan features: %s\n", missingFeatures.c_str());
+      // Do not exit here in case of MoltenVK, some 1.3 features are available via extensions.
+#ifndef __APPLE__
       assert(false);
       return Result(Result::Code::RuntimeError);
+#endif
     }
   }
 

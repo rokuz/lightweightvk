@@ -1,4 +1,4 @@
-﻿/*
+/*
  * LightweightVK
  *
  * This source code is licensed under the MIT license found in the
@@ -813,8 +813,13 @@ typedef struct GLFWwindow GLFWwindow;
 namespace lvk {
 
 struct ContextConfig {
+#ifndef __APPLE__
   uint32_t maxTextures = 512;
   uint32_t maxSamplers = 512;
+#else
+  uint32_t maxTextures = 16;
+  uint32_t maxSamplers = 16;
+#endif
   bool terminateOnValidationError = false; // invoke std::terminate() on any validation error
   bool enableValidation = true;
   lvk::ColorSpace swapChainColorSpace = lvk::ColorSpace_SRGB_LINEAR;

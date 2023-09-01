@@ -1,4 +1,4 @@
-﻿/*
+/*
  * LightweightVK
  *
  * This source code is licensed under the MIT license found in the
@@ -585,9 +585,17 @@ lvk::Result lvk::compileShader(VkDevice device,
       .language = GLSLANG_SOURCE_GLSL,
       .stage = getGLSLangShaderStage(stage),
       .client = GLSLANG_CLIENT_VULKAN,
+#ifndef __APPLE__
       .client_version = GLSLANG_TARGET_VULKAN_1_3,
+#else
+      .client_version = GLSLANG_TARGET_VULKAN_1_2,
+#endif
       .target_language = GLSLANG_TARGET_SPV,
+#ifndef __APPLE__
       .target_language_version = GLSLANG_TARGET_SPV_1_6,
+#else
+      .target_language_version = GLSLANG_TARGET_SPV_1_5,
+#endif
       .code = code,
       .default_version = 100,
       .default_profile = GLSLANG_NO_PROFILE,

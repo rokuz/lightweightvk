@@ -1,4 +1,4 @@
-﻿/*
+/*
  * LightweightVK
  *
  * This source code is licensed under the MIT license found in the
@@ -2145,7 +2145,11 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
   ctx_->checkAndUpdateDescriptorSets();
   ctx_->bindDefaultDescriptorSets(wrapper_->cmdBuf_, VK_PIPELINE_BIND_POINT_GRAPHICS);
 
+#ifndef __APPLE__
   vkCmdBeginRendering(wrapper_->cmdBuf_, &renderingInfo);
+#else
+  vkCmdBeginRenderingKHR(wrapper_->cmdBuf_, &renderingInfo);
+#endif
 }
 
 void lvk::CommandBuffer::cmdEndRendering() {
@@ -2153,7 +2157,11 @@ void lvk::CommandBuffer::cmdEndRendering() {
 
   isRendering_ = false;
 
+#ifndef __APPLE__
   vkCmdEndRendering(wrapper_->cmdBuf_);
+#else
+  vkCmdEndRenderingKHR(wrapper_->cmdBuf_);
+#endif
 
   const uint32_t numFbColorAttachments = framebuffer_.getNumColorAttachments();
 
