@@ -875,7 +875,7 @@ using ShaderModuleErrorCallback = void (*)(lvk::IContext*, lvk::ShaderModuleHand
 
 struct ContextConfig {
   bool terminateOnValidationError = false; // invoke std::terminate() on any validation error
-  bool enableValidation = true;
+  bool enableValidation = false;
   lvk::ColorSpace swapChainColorSpace = lvk::ColorSpace_SRGB_LINEAR;
   // owned by the application - should be alive until createVulkanContextWithSwapchain() returns
   const void* pipelineCacheData = nullptr;

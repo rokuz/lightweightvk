@@ -666,16 +666,17 @@ lvk::Result lvk::compileShader(VkDevice device,
 }
 
 VkResult lvk::setDebugObjectName(VkDevice device, VkObjectType type, uint64_t handle, const char* name) {
-  if (!name || !*name) {
-    return VK_SUCCESS;
-  }
-  const VkDebugUtilsObjectNameInfoEXT ni = {
-      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
-      .objectType = type,
-      .objectHandle = handle,
-      .pObjectName = name,
-  };
-  return vkSetDebugUtilsObjectNameEXT(device, &ni);
+  return VK_SUCCESS;
+//  if (!name || !*name) {
+//    return VK_SUCCESS;
+//  }
+//  const VkDebugUtilsObjectNameInfoEXT ni = {
+//      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_OBJECT_NAME_INFO_EXT,
+//      .objectType = type,
+//      .objectHandle = handle,
+//      .pObjectName = name,
+//  };
+//  return vkSetDebugUtilsObjectNameEXT(device, &ni);
 }
 
 VkSpecializationInfo lvk::getPipelineShaderStageSpecializationInfo(lvk::SpecializationConstantDesc desc,

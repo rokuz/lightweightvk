@@ -62,7 +62,7 @@ constexpr int kNumSamplesMSAA = 8;
 #else
 constexpr int kNumSamplesMSAA = 4;
 #endif
-constexpr bool kEnableCompression = true;
+constexpr bool kEnableCompression = false;
 constexpr bool kPreferIntegratedGPU = false;
 #if defined(NDEBUG)
 constexpr bool kEnableValidationLayers = false;

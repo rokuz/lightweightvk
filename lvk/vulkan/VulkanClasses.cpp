@@ -1036,10 +1036,10 @@ VkImageView lvk::VulkanImage::createImageView(VkImageViewType type,
       .image = vkImage_,
       .viewType = type,
       .format = format,
-      .components = {.r = VK_COMPONENT_SWIZZLE_IDENTITY,
-                     .g = VK_COMPONENT_SWIZZLE_IDENTITY,
-                     .b = VK_COMPONENT_SWIZZLE_IDENTITY,
-                     .a = VK_COMPONENT_SWIZZLE_IDENTITY},
+      .components = {.r = (format == VK_FORMAT_R8_UNORM ? VK_COMPONENT_SWIZZLE_R : VK_COMPONENT_SWIZZLE_IDENTITY),
+                     .g = (format == VK_FORMAT_R8_UNORM ? VK_COMPONENT_SWIZZLE_R : VK_COMPONENT_SWIZZLE_IDENTITY),
+                     .b = (format == VK_FORMAT_R8_UNORM ? VK_COMPONENT_SWIZZLE_R : VK_COMPONENT_SWIZZLE_IDENTITY),
+                     .a = (format == VK_FORMAT_R8_UNORM ? VK_COMPONENT_SWIZZLE_ONE : VK_COMPONENT_SWIZZLE_IDENTITY)},
       .subresourceRange = {aspectMask, baseLevel, numLevels ? numLevels : numLevels_, baseLayer, numLayers},
   };
   VkImageView vkView = VK_NULL_HANDLE;
@@ -1173,7 +1173,7 @@ void lvk::VulkanImage::generateMipmap(VkCommandBuffer commandBuffer) const {
       .pLabelName = "Generate mipmaps",
       .color = {1.0f, 0.75f, 1.0f, 1.0f},
   };
-  vkCmdBeginDebugUtilsLabelEXT(commandBuffer, &utilsLabel);
+  //vkCmdBeginDebugUtilsLabelEXT(commandBuffer, &utilsLabel);
 
   const VkImageLayout originalImageLayout = vkImageLayout_;
 
@@ -1261,7 +1261,7 @@ void lvk::VulkanImage::generateMipmap(VkCommandBuffer commandBuffer) const {
                           VK_PIPELINE_STAGE_TRANSFER_BIT, // srcStageMask
                           VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, // dstStageMask
                           VkImageSubresourceRange{imageAspectFlags, 0, numLevels_, 0, numLayers_});
-  vkCmdEndDebugUtilsLabelEXT(commandBuffer);
+  //vkCmdEndDebugUtilsLabelEXT(commandBuffer);
 
   vkImageLayout_ = originalImageLayout;
 }
@@ -1409,7 +1409,11 @@ lvk::VulkanSwapchain::VulkanSwapchain(VulkanContext& ctx, uint32_t width, uint32
       .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
       .queueFamilyIndexCount = 1,
       .pQueueFamilyIndices = &ctx.deviceQueues_.graphicsQueueFamilyIndex,
+#if defined(ANDROID)
+      .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
+#else
       .preTransform = ctx.deviceSurfaceCaps_.currentTransform,
+#endif
       .compositeAlpha = isCompositeAlphaOpaqueSupported ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
       .presentMode = chooseSwapPresentMode(ctx.devicePresentModes_),
       .clipped = VK_TRUE,
@@ -2142,43 +2146,43 @@ void lvk::CommandBuffer::cmdDispatchThreadGroups(const Dimensions& threadgroupCo
 }
 
 void lvk::CommandBuffer::cmdPushDebugGroupLabel(const char* label, uint32_t colorRGBA) const {
-  LVK_ASSERT(label);
-
-  if (!label) {
-    return;
-  }
-  const VkDebugUtilsLabelEXT utilsLabel = {
-      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
-      .pNext = nullptr,
-      .pLabelName = label,
-      .color = {float((colorRGBA >> 0) & 0xff) / 255.0f,
-                float((colorRGBA >> 8) & 0xff) / 255.0f,
-                float((colorRGBA >> 16) & 0xff) / 255.0f,
-                float((colorRGBA >> 24) & 0xff) / 255.0f},
-  };
-  vkCmdBeginDebugUtilsLabelEXT(wrapper_->cmdBuf_, &utilsLabel);
+//  LVK_ASSERT(label);
+//
+//  if (!label) {
+//    return;
+//  }
+//  const VkDebugUtilsLabelEXT utilsLabel = {
+//      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+//      .pNext = nullptr,
+//      .pLabelName = label,
+//      .color = {float((colorRGBA >> 0) & 0xff) / 255.0f,
+//                float((colorRGBA >> 8) & 0xff) / 255.0f,
+//                float((colorRGBA >> 16) & 0xff) / 255.0f,
+//                float((colorRGBA >> 24) & 0xff) / 255.0f},
+//  };
+//  vkCmdBeginDebugUtilsLabelEXT(wrapper_->cmdBuf_, &utilsLabel);
 }
 
 void lvk::CommandBuffer::cmdInsertDebugEventLabel(const char* label, uint32_t colorRGBA) const {
-  LVK_ASSERT(label);
-
-  if (!label) {
-    return;
-  }
-  const VkDebugUtilsLabelEXT utilsLabel = {
-      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
-      .pNext = nullptr,
-      .pLabelName = label,
-      .color = {float((colorRGBA >> 0) & 0xff) / 255.0f,
-                float((colorRGBA >> 8) & 0xff) / 255.0f,
-                float((colorRGBA >> 16) & 0xff) / 255.0f,
-                float((colorRGBA >> 24) & 0xff) / 255.0f},
-  };
-  vkCmdInsertDebugUtilsLabelEXT(wrapper_->cmdBuf_, &utilsLabel);
+//  LVK_ASSERT(label);
+//
+//  if (!label) {
+//    return;
+//  }
+//  const VkDebugUtilsLabelEXT utilsLabel = {
+//      .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_LABEL_EXT,
+//      .pNext = nullptr,
+//      .pLabelName = label,
+//      .color = {float((colorRGBA >> 0) & 0xff) / 255.0f,
+//                float((colorRGBA >> 8) & 0xff) / 255.0f,
+//                float((colorRGBA >> 16) & 0xff) / 255.0f,
+//                float((colorRGBA >> 24) & 0xff) / 255.0f},
+//  };
+//  vkCmdInsertDebugUtilsLabelEXT(wrapper_->cmdBuf_, &utilsLabel);
 }
 
 void lvk::CommandBuffer::cmdPopDebugGroupLabel() const {
-  vkCmdEndDebugUtilsLabelEXT(wrapper_->cmdBuf_);
+//  vkCmdEndDebugUtilsLabelEXT(wrapper_->cmdBuf_);
 }
 
 void lvk::CommandBuffer::useComputeTexture(TextureHandle handle) {
@@ -3120,7 +3124,7 @@ lvk::VulkanContext::~VulkanContext() {
   // Device has to be destroyed prior to Instance
   vkDestroyDevice(vkDevice_, nullptr);
 
-  vkDestroyDebugUtilsMessengerEXT(vkInstance_, vkDebugUtilsMessenger_, nullptr);
+  //vkDestroyDebugUtilsMessengerEXT(vkInstance_, vkDebugUtilsMessenger_, nullptr);
   vkDestroyInstance(vkInstance_, nullptr);
 
   glslang_finalize_process();
@@ -4145,9 +4149,11 @@ void lvk::VulkanContext::createInstance() {
 
   const char* instanceExtensionNames[] = {
     VK_KHR_SURFACE_EXTENSION_NAME,
-    VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
+    //VK_EXT_DEBUG_UTILS_EXTENSION_NAME,
 #if defined(_WIN32)
     VK_KHR_WIN32_SURFACE_EXTENSION_NAME,
+#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
+    VK_KHR_ANDROID_SURFACE_EXTENSION_NAME,
 #elif defined(__linux__)
 #if defined(VK_USE_PLATFORM_WAYLAND_KHR)
     VK_KHR_WAYLAND_SURFACE_EXTENSION_NAME,
@@ -4236,18 +4242,18 @@ void lvk::VulkanContext::createInstance() {
 #endif
 
   // debug messenger
-  {
-    const VkDebugUtilsMessengerCreateInfoEXT ci = {
-        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
-        .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
-                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
-        .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
-                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
-        .pfnUserCallback = &vulkanDebugCallback,
-        .pUserData = this,
-    };
-    VK_ASSERT(vkCreateDebugUtilsMessengerEXT(vkInstance_, &ci, nullptr, &vkDebugUtilsMessenger_));
-  }
+//  {
+//    const VkDebugUtilsMessengerCreateInfoEXT ci = {
+//        .sType = VK_STRUCTURE_TYPE_DEBUG_UTILS_MESSENGER_CREATE_INFO_EXT,
+//        .messageSeverity = VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT |
+//                           VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT,
+//        .messageType = VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT | VK_DEBUG_UTILS_MESSAGE_TYPE_VALIDATION_BIT_EXT |
+//                       VK_DEBUG_UTILS_MESSAGE_TYPE_PERFORMANCE_BIT_EXT,
+//        .pfnUserCallback = &vulkanDebugCallback,
+//        .pUserData = this,
+//    };
+//    VK_ASSERT(vkCreateDebugUtilsMessengerEXT(vkInstance_, &ci, nullptr, &vkDebugUtilsMessenger_));
+//  }
 
   uint32_t count = 0;
   VK_ASSERT(vkEnumerateInstanceExtensionProperties(nullptr, &count, nullptr));
@@ -4272,6 +4278,13 @@ void lvk::VulkanContext::createSurface(void* window, void* display) {
       .hwnd = (HWND)window,
   };
   VK_ASSERT(vkCreateWin32SurfaceKHR(vkInstance_, &ci, nullptr, &vkSurface_));
+#elif defined(VK_USE_PLATFORM_ANDROID_KHR)
+  const VkAndroidSurfaceCreateInfoKHR ci = {
+      .sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR,
+      .pNext = nullptr,
+      .flags = 0,
+      .window = (ANativeWindow *)window};
+  VK_ASSERT(vkCreateAndroidSurfaceKHR(vkInstance_, &ci, nullptr, &vkSurface_));
 #elif defined(VK_USE_PLATFORM_XLIB_KHR)
   const VkXlibSurfaceCreateInfoKHR ci = {
       .sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR,
@@ -4451,9 +4464,13 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .multiDrawIndirect = VK_TRUE,
       .drawIndirectFirstInstance = VK_TRUE,
       .depthBiasClamp = VK_TRUE,
+#ifndef ANDROID
       .fillModeNonSolid = VK_TRUE,
+#endif
       .samplerAnisotropy = VK_TRUE,
+#ifndef ANDROID
       .textureCompressionBC = VK_TRUE,
+#endif
       .fragmentStoresAndAtomics = VK_TRUE,
   };
   VkPhysicalDeviceVulkan11Features deviceFeatures11 = {

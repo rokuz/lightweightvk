@@ -59,6 +59,8 @@ target_include_directories(LVKVulkan PUBLIC "${LVK_ROOT_DIR}/third-party/deps/sr
 if(WIN32)
   add_definitions("-DVK_USE_PLATFORM_WIN32_KHR=1")
   add_definitions("-DNOMINMAX")
+elseif(ANDROID)
+  add_definitions("-DVK_USE_PLATFORM_ANDROID_KHR=1")
 elseif(UNIX AND NOT APPLE)
   if(WAYLAND_FOUND)
     add_definitions("-DVK_USE_PLATFORM_WAYLAND_KHR=1")
