@@ -1236,6 +1236,10 @@ struct ContextConfig {
   VulkanVersion vulkanVersion = VulkanVersion_1_3;
   bool terminateOnValidationError = false; // invoke std::terminate() on any validation error
   bool enableValidation = true;
+  // GPU-Assisted Validation instruments shaders; some drivers (e.g. MoltenVK) cannot compile the
+  // instrumented SPIR-V. Disable to keep core validation while dropping GPU-AV. No effect unless
+  // enableValidation is also true.
+  bool enableValidationGpuAssisted = true;
   bool generateSPIRVDebugInfo = true;
   lvk::ColorSpace swapchainRequestedColorSpace = lvk::ColorSpace_SRGB_NONLINEAR;
   // owned by the application - should be alive until createVulkanContextWithSwapchain() returns
