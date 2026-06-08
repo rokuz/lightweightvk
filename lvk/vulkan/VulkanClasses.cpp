@@ -6657,12 +6657,13 @@ lvk::Result lvk::VulkanContext::createInstance() {
   };
 #endif // ANDROID
 
+  const bool enableGpuAv = config_.enableValidation && config_.enableValidationGpuAssisted;
   const VkValidationFeaturesEXT features = {
       .sType = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT,
       .pNext = nullptr,
 #if !defined(ANDROID)
-      .enabledValidationFeatureCount = config_.enableValidation ? (uint32_t)LVK_ARRAY_NUM_ELEMENTS(validationFeaturesEnabled) : 0u,
-      .pEnabledValidationFeatures = config_.enableValidation ? validationFeaturesEnabled : nullptr,
+      .enabledValidationFeatureCount = enableGpuAv ? (uint32_t)LVK_ARRAY_NUM_ELEMENTS(validationFeaturesEnabled) : 0u,
+      .pEnabledValidationFeatures = enableGpuAv ? validationFeaturesEnabled : nullptr,
 #endif
   };
 
