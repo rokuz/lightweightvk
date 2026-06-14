@@ -2810,12 +2810,12 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
         .storeOp = storeOpToVkAttachmentStoreOp(descDepth.storeOp),
         .clearValue = {.depthStencil = {.depth = descDepth.clearDepth, .stencil = descDepth.clearStencil}},
     };
-    // handle depth MSAA
+    if (numFbColorAttachments == 0) {
+      samples = depthTexture.vkSamples_;
+    }
     if (fb.depthStencil.resolveTexture) {
       LVK_ASSERT(depthTexture.vkSamples_ > 1);
       LVK_ASSERT(depthTexture.vkSamples_ == samples);
-      LVK_ASSERT_MSG(depthAttachment.storeOp == VK_ATTACHMENT_STORE_OP_DONT_CARE,
-                     "Multisampled attachments should have store op DONT_CARE");
       const lvk::Framebuffer::AttachmentDesc& attachment = fb.depthStencil;
       LVK_ASSERT_MSG(!attachment.resolveTexture.empty(), "Framebuffer depth attachment should contain a resolve texture");
       lvk::VulkanImage& depthResolveTexture = *ctx_->texturesPool_.get(attachment.resolveTexture);
