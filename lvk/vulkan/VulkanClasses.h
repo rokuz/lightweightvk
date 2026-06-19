@@ -198,6 +198,7 @@ class VulkanImmediateCommands final {
   const CommandBufferWrapper& acquire();
   SubmitHandle submit(const CommandBufferWrapper& wrapper, const VkSemaphore* extraWaits = nullptr, uint32_t numExtraWaits = 0);
   void waitSemaphore(VkSemaphore semaphore);
+  void waitTimelineSemaphore(VkSemaphore semaphore, uint64_t value);
   void signalSemaphore(VkSemaphore semaphore, uint64_t signalValue);
   VkSemaphore acquireLastSubmitSemaphore();
   void setLastPresentSemaphore(VkSemaphore semaphore, VkFence presentFence);
@@ -225,6 +226,8 @@ class VulkanImmediateCommands final {
                                                 .stageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT};
   VkSemaphoreSubmitInfo waitSemaphore_ = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                           .stageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}; // extra "wait" semaphore
+  VkSemaphoreSubmitInfo waitTimeline_ = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
+                                         .stageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}; // timeline wait (cross-queue)
   VkSemaphoreSubmitInfo signalSemaphore_ = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                             .stageMask = VK_PIPELINE_STAGE_ALL_COMMANDS_BIT}; // extra "signal" semaphore
   VkSemaphore lastPresentSemaphore_ = VK_NULL_HANDLE; // present-wait semaphore of the last vkQueuePresentKHR()

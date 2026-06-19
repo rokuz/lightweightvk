@@ -794,6 +794,7 @@ struct VulkanContextImpl final {
 
   lvk::CommandBuffer currentCommandBuffer_;
   lvk::CommandBuffer currentComputeCommandBuffer_; // async-compute slot (coexists with the graphics one).
+  uint64_t lastGraphicsPresentTimelineValue_ = 0;
 
   std::vector<DeferredTask> deferredTasks_;
 
@@ -1752,14 +1753,18 @@ lvk::SubmitHandle lvk::VulkanImmediateCommands::submit(const CommandBufferWrappe
   LVK_ASSERT(wrapper.isEncoding_);
   VK_ASSERT(vkEndCommandBuffer(wrapper.cmdBuf_));
 
-  // waits: swapchain-acquire + intra-queue chain + the cross-queue waits from Dependencies::compute.
+  // waits: swapchain-acquire + intra-queue chain + an optional cross-queue timeline wait + the cross-queue
+  // binary waits from Dependencies::compute.
   std::vector<VkSemaphoreSubmitInfo> waitSemaphores;
-  waitSemaphores.reserve(2u + numExtraWaits);
+  waitSemaphores.reserve(3u + numExtraWaits);
   if (waitSemaphore_.semaphore) {
     waitSemaphores.push_back(waitSemaphore_);
   }
   if (lastSubmitSemaphore_.semaphore) {
     waitSemaphores.push_back(lastSubmitSemaphore_);
+  }
+  if (waitTimeline_.semaphore) {
+    waitSemaphores.push_back(waitTimeline_);
   }
   for (uint32_t i = 0; i != numExtraWaits; i++) {
     waitSemaphores.push_back(VkSemaphoreSubmitInfo{.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
@@ -1869,6 +1874,7 @@ lvk::SubmitHandle lvk::VulkanImmediateCommands::submit(const CommandBufferWrappe
   lastSubmitSemaphore_.semaphore = wrapper.semaphore_;
   lastSubmitHandle_ = wrapper.handle_;
   waitSemaphore_.semaphore = VK_NULL_HANDLE;
+  waitTimeline_.semaphore = VK_NULL_HANDLE;
   signalSemaphore_.semaphore = VK_NULL_HANDLE;
 
   // reset
@@ -1887,6 +1893,13 @@ void lvk::VulkanImmediateCommands::waitSemaphore(VkSemaphore semaphore) {
   LVK_ASSERT(waitSemaphore_.semaphore == VK_NULL_HANDLE);
 
   waitSemaphore_.semaphore = semaphore;
+}
+
+void lvk::VulkanImmediateCommands::waitTimelineSemaphore(VkSemaphore semaphore, uint64_t value) {
+  LVK_ASSERT(waitTimeline_.semaphore == VK_NULL_HANDLE);
+
+  waitTimeline_.semaphore = semaphore;
+  waitTimeline_.value = value;
 }
 
 void lvk::VulkanImmediateCommands::signalSemaphore(VkSemaphore semaphore, uint64_t signalValue) {
@@ -4304,6 +4317,7 @@ lvk::SubmitHandle lvk::VulkanContext::submit(lvk::ICommandBuffer& commandBuffer,
     // we wait for this value next time we want to acquire this swapchain image
     swapchain_->timelineWaitValues_[swapchain_->currentImageIndex_] = signalValue;
     immediate_->signalSemaphore(timelineSemaphore_, signalValue);
+    pimpl_->lastGraphicsPresentTimelineValue_ = signalValue; // async-compute submits wait on this (WAR)
   }
 
   // Submit on the command buffer's own queue (graphics or async-compute).
@@ -4328,6 +4342,8 @@ lvk::SubmitHandle lvk::VulkanContext::submit(lvk::ICommandBuffer& commandBuffer,
       img.vkImageLayout_ = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
       img.pendingAcquireSrcFamily_ = computeFamily; // graphics completes the transfer on first read
     }
+    // Graphics->compute write-after-read guard
+    immediateCompute_->waitTimelineSemaphore(timelineSemaphore_, pimpl_->lastGraphicsPresentTimelineValue_);
   }
 
   // Cross-queue execution dependency.
