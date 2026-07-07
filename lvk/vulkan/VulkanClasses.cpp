@@ -9051,3 +9051,15 @@ bool lvk::VulkanContext::isExtensionEnabled(const char* ext) const {
   }
   return false;
 }
+
+bool lvk::VulkanContext::supportsTextureFormat(Format format) const {
+  const VkFormat vkFormat = lvk::formatToVkFormat(format);
+  if (vkFormat == VK_FORMAT_UNDEFINED) {
+    return false;
+  }
+  VkFormatProperties2 props = {
+      .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
+  };
+  vkGetPhysicalDeviceFormatProperties2(getVkPhysicalDevice(), vkFormat, &props);
+  return (props.formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
+}

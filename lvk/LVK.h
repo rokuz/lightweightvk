@@ -562,8 +562,21 @@ enum Format : uint8_t {
 
   Format_ETC2_RGB8,
   Format_ETC2_SRGB8,
+  Format_BC1_RGBA,
+  Format_BC1_SRGBA,
+  Format_BC3_RGBA,
+  Format_BC3_SRGBA,
+  Format_BC4_R,
+  Format_BC5_RG,
   Format_BC7_RGBA,
   Format_BC7_SRGBA,
+
+  Format_ASTC_4x4,
+  Format_ASTC_4x4_SRGB,
+  Format_ASTC_5x5,
+  Format_ASTC_5x5_SRGB,
+  Format_ASTC_6x6,
+  Format_ASTC_6x6_SRGB,
 
   Format_Z_UN16,
   Format_Z_UN24,
@@ -1235,6 +1248,7 @@ class IContext {
 
   virtual bool isExtensionEnabled(const char* ext) const = 0;
   virtual bool supportsAsyncCompute() const = 0;
+  virtual bool supportsTextureFormat(Format format) const = 0;
 
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;

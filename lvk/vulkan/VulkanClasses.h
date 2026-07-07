@@ -658,6 +658,7 @@ class VulkanContext final : public IContext {
   bool supportsAsyncCompute() const override {
     return immediateCompute_ != nullptr;
   }
+  bool supportsTextureFormat(Format format) const override;
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)

@@ -287,10 +287,34 @@ VkFormat lvk::formatToVkFormat(lvk::Format format) {
     return VK_FORMAT_ETC2_R8G8B8_UNORM_BLOCK;
   case lvk::Format_ETC2_SRGB8:
     return VK_FORMAT_ETC2_R8G8B8_SRGB_BLOCK;
+  case lvk::Format_BC1_RGBA:
+    return VK_FORMAT_BC1_RGBA_UNORM_BLOCK;
+  case lvk::Format_BC1_SRGBA:
+    return VK_FORMAT_BC1_RGBA_SRGB_BLOCK;
+  case lvk::Format_BC3_RGBA:
+    return VK_FORMAT_BC3_UNORM_BLOCK;
+  case lvk::Format_BC3_SRGBA:
+    return VK_FORMAT_BC3_SRGB_BLOCK;
+  case lvk::Format_BC4_R:
+    return VK_FORMAT_BC4_UNORM_BLOCK;
+  case lvk::Format_BC5_RG:
+    return VK_FORMAT_BC5_UNORM_BLOCK;
   case lvk::Format_BC7_RGBA:
     return VK_FORMAT_BC7_UNORM_BLOCK;
   case lvk::Format_BC7_SRGBA:
     return VK_FORMAT_BC7_SRGB_BLOCK;
+  case lvk::Format_ASTC_4x4:
+    return VK_FORMAT_ASTC_4x4_UNORM_BLOCK;
+  case lvk::Format_ASTC_4x4_SRGB:
+    return VK_FORMAT_ASTC_4x4_SRGB_BLOCK;
+  case lvk::Format_ASTC_5x5:
+    return VK_FORMAT_ASTC_5x5_UNORM_BLOCK;
+  case lvk::Format_ASTC_5x5_SRGB:
+    return VK_FORMAT_ASTC_5x5_SRGB_BLOCK;
+  case lvk::Format_ASTC_6x6:
+    return VK_FORMAT_ASTC_6x6_UNORM_BLOCK;
+  case lvk::Format_ASTC_6x6_SRGB:
+    return VK_FORMAT_ASTC_6x6_SRGB_BLOCK;
   case lvk::Format_Z_UN16:
     return VK_FORMAT_D16_UNORM;
   case lvk::Format_Z_UN24:
@@ -414,10 +438,34 @@ lvk::Format lvk::vkFormatToFormat(VkFormat format) {
     return Format_ETC2_SRGB8;
   case VK_FORMAT_D16_UNORM:
     return Format_Z_UN16;
+  case VK_FORMAT_BC1_RGBA_UNORM_BLOCK:
+    return Format_BC1_RGBA;
+  case VK_FORMAT_BC1_RGBA_SRGB_BLOCK:
+    return Format_BC1_SRGBA;
+  case VK_FORMAT_BC3_UNORM_BLOCK:
+    return Format_BC3_RGBA;
+  case VK_FORMAT_BC3_SRGB_BLOCK:
+    return Format_BC3_SRGBA;
+  case VK_FORMAT_BC4_UNORM_BLOCK:
+    return Format_BC4_R;
+  case VK_FORMAT_BC5_UNORM_BLOCK:
+    return Format_BC5_RG;
   case VK_FORMAT_BC7_UNORM_BLOCK:
     return Format_BC7_RGBA;
   case VK_FORMAT_BC7_SRGB_BLOCK:
     return Format_BC7_SRGBA;
+  case VK_FORMAT_ASTC_4x4_UNORM_BLOCK:
+    return Format_ASTC_4x4;
+  case VK_FORMAT_ASTC_4x4_SRGB_BLOCK:
+    return Format_ASTC_4x4_SRGB;
+  case VK_FORMAT_ASTC_5x5_UNORM_BLOCK:
+    return Format_ASTC_5x5;
+  case VK_FORMAT_ASTC_5x5_SRGB_BLOCK:
+    return Format_ASTC_5x5_SRGB;
+  case VK_FORMAT_ASTC_6x6_UNORM_BLOCK:
+    return Format_ASTC_6x6;
+  case VK_FORMAT_ASTC_6x6_SRGB_BLOCK:
+    return Format_ASTC_6x6_SRGB;
   case VK_FORMAT_X8_D24_UNORM_PACK32:
     return Format_Z_UN24;
   case VK_FORMAT_D24_UNORM_S8_UINT:
