@@ -671,6 +671,7 @@ class VulkanContext final : public IContext {
   bool supportsDepthBounds() const override {
     return vkFeatures10_.features.depthBounds == VK_TRUE;
   }
+  bool supportsTextureFormat(Format format) const override;
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
