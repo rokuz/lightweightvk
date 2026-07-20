@@ -659,6 +659,9 @@ class VulkanContext final : public IContext {
     return immediateCompute_ != nullptr;
   }
   bool supportsTextureFormat(Format format) const override;
+  bool supportsRayTracingPipeline() const override {
+    return has_KHR_acceleration_structure_ && has_KHR_ray_tracing_pipeline_;
+  }
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
