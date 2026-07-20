@@ -673,6 +673,9 @@ class VulkanContext final : public IContext {
     return vkFeatures10_.features.depthBounds == VK_TRUE;
   }
   bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags) const override;
+  bool supportsShaderInterlock() const override {
+    return has_EXT_fragment_shader_interlock_;
+  }
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
@@ -894,6 +897,7 @@ class VulkanContext final : public IContext {
   bool has_EXT_device_fault_ = false;
   bool has_EXT_shader_tile_image = false;
   bool has_EXT_mesh_shader_ = false;
+  bool has_EXT_fragment_shader_interlock_ = false;
   bool has_MVK_macos_surface_ = false;
   bool has_KHR_shared_presentable_image_ = false;
   bool has_KHR_present_mode_fifo_latest_ready_ = false;
