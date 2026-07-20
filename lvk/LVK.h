@@ -1296,6 +1296,9 @@ class IContext {
   virtual bool supportsAsyncCompute() const = 0;
   virtual bool supportsDepthBounds() const = 0;
   virtual bool supportsTextureFormat(Format format) const = 0;
+  virtual bool supportsRayTracingPipeline() const {
+    return false;
+  }
 
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;
