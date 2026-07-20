@@ -1252,6 +1252,9 @@ class IContext {
   virtual bool supportsRayTracingPipeline() const {
     return false;
   }
+  virtual bool supportsShaderInterlock() const {
+    return false;
+  }
 
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;
