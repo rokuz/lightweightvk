@@ -4964,6 +4964,15 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
     return {};
   }
 
+  if (usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) {
+    VkFormatProperties2 storageProps = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
+    vkGetPhysicalDeviceFormatProperties2(vkPhysicalDevice_, vkFormat, &storageProps);
+    if (!LVK_VERIFY(storageProps.formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "Format does not support storage images on this device");
+      return {};
+    }
+  }
+
   LVK_ASSERT_MSG(numLevels > 0, "The image must contain at least one mip-level");
   LVK_ASSERT_MSG(numLayers > 0, "The image must contain at least one layer");
   LVK_ASSERT_MSG(vkSamples > 0, "The image must contain at least one sample");
