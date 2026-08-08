@@ -809,6 +809,8 @@ struct RenderPass final {
 
   uint32_t layerCount = 1;
   uint32_t viewMask = 0;
+  uint32_t attachmentlessWidth = 1;
+  uint32_t attachmentlessHeight = 1;
 
   uint32_t getNumColorAttachments() const {
     uint32_t n = 0;
