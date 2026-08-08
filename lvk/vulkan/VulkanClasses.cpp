@@ -849,9 +849,11 @@ VkSurfaceFormatKHR chooseSwapSurfaceFormat(const std::vector<VkSurfaceFormat2KHR
 namespace lvk {
 
 struct DeferredTask {
-  DeferredTask(std::packaged_task<void()>&& task, SubmitHandle handle) : task_(std::move(task)), handle_(handle) {}
+  DeferredTask(std::packaged_task<void()>&& task, SubmitHandle handle, SubmitHandle handleCompute) :
+    task_(std::move(task)), handle_(handle), handleCompute_(handleCompute) {}
   std::packaged_task<void()> task_;
   SubmitHandle handle_;
+  SubmitHandle handleCompute_;
 };
 
 struct VulkanContextImpl final {
@@ -9170,7 +9172,9 @@ void lvk::VulkanContext::deferredTask(std::packaged_task<void()>&& task, SubmitH
   if (handle.empty()) {
     handle = immediate_->getNextSubmitHandle();
   }
-  pimpl_->deferredTasks_.emplace_back(std::move(task), handle);
+  // A resource can be in flight on either queue, and the two submit timelines are independent.
+  const SubmitHandle handleCompute = immediateCompute_ ? immediateCompute_->getNextSubmitHandle() : SubmitHandle();
+  pimpl_->deferredTasks_.emplace_back(std::move(task), handle, handleCompute);
 }
 
 void* lvk::VulkanContext::getVmaAllocator() const {
@@ -9180,7 +9184,8 @@ void* lvk::VulkanContext::getVmaAllocator() const {
 void lvk::VulkanContext::processDeferredTasks() const {
   std::vector<DeferredTask>::iterator it = pimpl_->deferredTasks_.begin();
 
-  while (it != pimpl_->deferredTasks_.end() && immediate_->isReady(it->handle_, true)) {
+  while (it != pimpl_->deferredTasks_.end() && immediate_->isReady(it->handle_, true) &&
+         (!immediateCompute_ || immediateCompute_->isReady(it->handleCompute_, true))) {
     (it++)->task_();
   }
 
@@ -9190,6 +9195,9 @@ void lvk::VulkanContext::processDeferredTasks() const {
 void lvk::VulkanContext::waitDeferredTasks() {
   for (auto& task : pimpl_->deferredTasks_) {
     immediate_->wait(task.handle_);
+    if (immediateCompute_ && !task.handleCompute_.empty()) {
+      immediateCompute_->wait(task.handleCompute_);
+    }
     task.task_();
   }
   pimpl_->deferredTasks_.clear();
