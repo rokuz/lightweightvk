@@ -391,7 +391,9 @@ struct AccelerationStructure {
   VkAccelerationStructureKHR vkHandle = VK_NULL_HANDLE;
   uint64_t deviceAddress = 0;
   lvk::Holder<lvk::BufferHandle> buffer;
-  lvk::Holder<lvk::BufferHandle> scratchBuffer; // Store only for TLAS
+  lvk::Holder<lvk::BufferHandle> scratchBuffer; // TLAS, and BLAS built with AllowUpdate
+  VkAccelerationStructureGeometryKHR geometry = {};
+  VkBuildAccelerationStructureFlagsKHR buildFlags = 0;
 };
 
 class CommandBuffer final : public ICommandBuffer {
@@ -478,6 +480,7 @@ class CommandBuffer final : public ICommandBuffer {
                     const TextureLayers& dstLayers) override;
   void cmdGenerateMipmap(TextureHandle handle) override;
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
+  void cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) override;
 
   operator VkCommandBuffer() const
 #if defined(LVK_WITH_RAW_VULKAN)

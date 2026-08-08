@@ -1152,6 +1152,7 @@ class ICommandBuffer {
                             const TextureLayers& dstLayers = {}) = 0;
   virtual void cmdGenerateMipmap(TextureHandle handle) = 0;
   virtual void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) = 0;
+  virtual void cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) = 0;
 
 #if defined(LVK_WITH_RAW_VULKAN)
   virtual operator VkCommandBuffer() const = 0;
