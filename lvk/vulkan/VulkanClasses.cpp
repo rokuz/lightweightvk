@@ -7244,6 +7244,7 @@ lvk::Result lvk::VulkanContext::createInstance() {
 
   const VkBool32 gpuav_enable = enableGpuAV ? VK_TRUE : VK_FALSE;
   const VkBool32 gpuav_post_process_descriptor_indexing = VK_FALSE; // https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/9222
+  const VkBool32 syncval_enable = config_.enableValidation && config_.enableValidationSync ? VK_TRUE : VK_FALSE;
   const VkBool32 legacy_detection = config_.enableValidation ? VK_TRUE : VK_FALSE;
   const char* legacy_detection_mode = "ONLY_ENABLED";
 #define LAYER_SETTINGS_BOOL32(name, var)         \
@@ -7262,6 +7263,8 @@ lvk::Result lvk::VulkanContext::createInstance() {
   const VkLayerSettingEXT settings[] = {
       LAYER_SETTINGS_BOOL32("gpuav_enable", &gpuav_enable),
       LAYER_SETTINGS_BOOL32("gpuav_post_process_descriptor_indexing", &gpuav_post_process_descriptor_indexing),
+      LAYER_SETTINGS_BOOL32("validate_sync", &syncval_enable),
+      LAYER_SETTINGS_BOOL32("syncval_submit_time_validation", &syncval_enable),
       LAYER_SETTINGS_BOOL32("legacy_detection", &legacy_detection),
       LAYER_SETTINGS_STRING("legacy_detection_mode", &legacy_detection_mode),
   };
