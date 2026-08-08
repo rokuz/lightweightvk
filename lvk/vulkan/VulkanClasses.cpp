@@ -3911,6 +3911,70 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
   }
 }
 
+void lvk::CommandBuffer::cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) {
+  LVK_PROFILER_FUNCTION();
+
+  if (handles.empty()) {
+    return;
+  }
+
+  std::vector<VkAccelerationStructureBuildGeometryInfoKHR> buildInfos;
+  std::vector<VkAccelerationStructureBuildRangeInfoKHR*> ranges;
+  buildInfos.reserve(handles.size());
+  ranges.reserve(handles.size());
+
+  for (AccelStructHandle handle : handles) {
+    lvk::AccelerationStructure* as = ctx_->accelStructuresPool_.get(handle);
+    LVK_ASSERT(as && !as->isTLAS);
+    LVK_ASSERT_MSG(as->buildFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR,
+                   "BLAS must be built with AccelStructBuildFlagBits_AllowUpdate to be refit");
+    buildInfos.push_back(VkAccelerationStructureBuildGeometryInfoKHR{
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+        .flags = as->buildFlags,
+        .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR,
+        .srcAccelerationStructure = as->vkHandle,
+        .dstAccelerationStructure = as->vkHandle,
+        .geometryCount = 1,
+        .pGeometries = &as->geometry,
+        .scratchData = {.deviceAddress =
+                            getAlignedAddress(ctx_->gpuAddress(as->scratchBuffer),
+                                              ctx_->accelerationStructureProperties_.minAccelerationStructureScratchOffsetAlignment)},
+    });
+    ranges.push_back(&as->buildRangeInfo);
+  }
+
+  {
+    const VkMemoryBarrier2 barrier = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT |
+                        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+    };
+    const VkDependencyInfo dependencyInfo{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+    vkCmdPipelineBarrier2(wrapper_->cmdBuf_, &dependencyInfo);
+  }
+
+  vkCmdBuildAccelerationStructuresKHR(
+      wrapper_->cmdBuf_, static_cast<uint32_t>(buildInfos.size()), buildInfos.data(), ranges.data());
+
+  {
+    const VkMemoryBarrier2 barrier = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+        .srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
+        .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+        .dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT,
+    };
+    const VkDependencyInfo dependencyInfo{
+        .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO, .memoryBarrierCount = 1, .pMemoryBarriers = &barrier};
+    vkCmdPipelineBarrier2(wrapper_->cmdBuf_, &dependencyInfo);
+  }
+}
+
 lvk::VulkanStagingDevice::VulkanStagingDevice(VulkanContext& ctx) : ctx_(ctx) {
   LVK_PROFILER_FUNCTION();
 
@@ -5566,6 +5630,7 @@ lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& des
           },
           nullptr,
           outResult),
+      .geometry = accelerationStructureGeometry,
   };
   const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
@@ -5584,7 +5649,8 @@ lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& des
       {
           .usage = lvk::BufferUsageBits_Storage,
           .storage = lvk::StorageType_Device,
-          .size = accelerationStructureBuildSizesInfo.buildScratchSize,
+          .size = std::max(accelerationStructureBuildSizesInfo.buildScratchSize,
+                           accelerationStructureBuildSizesInfo.updateScratchSize),
           .debugName = "Buffer: BLAS scratch",
       },
       nullptr,
@@ -5614,6 +5680,10 @@ lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& des
       .accelerationStructure = accelStruct.vkHandle,
   };
   accelStruct.deviceAddress = vkGetAccelerationStructureDeviceAddressKHR(vkDevice_, &accelerationDeviceAddressInfo);
+
+  if (desc.buildFlags & lvk::AccelStructBuildFlagBits_AllowUpdate) {
+    accelStruct.scratchBuffer = std::move(scratchBuffer);
+  }
 
   return accelStructuresPool_.create(std::move(accelStruct));
 }
