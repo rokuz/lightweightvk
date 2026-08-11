@@ -2695,7 +2695,7 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
   if (depthTex) {
     const lvk::VulkanImage& depthImg = *ctx_->texturesPool_.get(depthTex);
     LVK_ASSERT_MSG(depthImg.vkImageFormat_ != VK_FORMAT_UNDEFINED, "Invalid depth attachment format");
-    LVK_ASSERT_MSG(depthImg.isDepthFormat_, "Invalid depth attachment format");
+    LVK_ASSERT_MSG(depthImg.isDepthFormat_ || depthImg.isStencilFormat_, "Invalid depth attachment format");
     const VkImageAspectFlags flags = depthImg.getImageAspectFlags();
     depthImg.transitionLayout(wrapper_->cmdBuf_,
                               VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -2845,6 +2845,14 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
 
   const bool isStencilFormat = (renderPass.stencil.loadOp != lvk::LoadOp_DontCare) || (renderPass.stencil.storeOp != lvk::StoreOp_DontCare);
 
+  if (depthTex && isStencilFormat) {
+    stencilAttachment.loadOp = loadOpToVkAttachmentLoadOp(renderPass.stencil.loadOp);
+    stencilAttachment.storeOp = storeOpToVkAttachmentStoreOp(renderPass.stencil.storeOp);
+    stencilAttachment.clearValue.depthStencil.stencil = renderPass.stencil.clearStencil;
+  }
+
+  const bool hasDepthAspect = depthTex && ctx_->texturesPool_.get(depthTex)->isDepthFormat_;
+
   // optional fragment density map (VK_EXT_fragment_density_map)
   const VkRenderingFragmentDensityMapAttachmentInfoEXT fragmentDensityMapInfo = [this, &fb]() {
     if (!fb.fragmentDensityMap)
@@ -2900,8 +2908,8 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
       .viewMask = renderPass.viewMask,
       .colorAttachmentCount = numFbColorAttachments,
       .pColorAttachments = colorAttachments,
-      .pDepthAttachment = depthTex ? &depthAttachment : nullptr,
-      .pStencilAttachment = isStencilFormat ? &stencilAttachment : nullptr,
+      .pDepthAttachment = hasDepthAspect ? &depthAttachment : nullptr,
+      .pStencilAttachment = (depthTex && isStencilFormat) ? &stencilAttachment : nullptr,
   };
 
   cmdBindViewport(viewport);
@@ -2990,7 +2998,8 @@ void lvk::CommandBuffer::cmdBindRenderPipeline(lvk::RenderPipelineHandle handle)
   LVK_ASSERT(rps);
 
   const bool hasDepthAttachmentPipeline = rps->desc_.depthFormat != Format_Invalid;
-  const bool hasDepthAttachmentPass = !framebuffer_.depthStencil.texture.empty();
+  const bool hasDepthAttachmentPass = !framebuffer_.depthStencil.texture.empty() &&
+                                      ctx_->texturesPool_.get(framebuffer_.depthStencil.texture)->isDepthFormat_;
 
   // VK_EXT_dynamic_rendering_unused_attachments allows the depth attachments of a render pass and a render pipeline to mismatch
   if (hasDepthAttachmentPipeline != hasDepthAttachmentPass && !ctx_->has_EXT_dynamic_rendering_unused_attachments_) {
@@ -9169,8 +9178,12 @@ lvk::SamplerHandle lvk::VulkanContext::createSampler(const VkSamplerCreateInfo& 
 
 void lvk::VulkanContext::querySurfaceCapabilities() {
   // enumerate only the formats we are using
-  const VkFormat depthFormats[] = {
-      VK_FORMAT_D32_SFLOAT_S8_UINT, VK_FORMAT_D24_UNORM_S8_UINT, VK_FORMAT_D16_UNORM_S8_UINT, VK_FORMAT_D32_SFLOAT, VK_FORMAT_D16_UNORM};
+  const VkFormat depthFormats[] = {VK_FORMAT_D32_SFLOAT_S8_UINT,
+                                   VK_FORMAT_D24_UNORM_S8_UINT,
+                                   VK_FORMAT_D16_UNORM_S8_UINT,
+                                   VK_FORMAT_D32_SFLOAT,
+                                   VK_FORMAT_D16_UNORM,
+                                   VK_FORMAT_S8_UINT};
   for (const VkFormat& depthFormat : depthFormats) {
     VkFormatProperties2 props = {
         .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
