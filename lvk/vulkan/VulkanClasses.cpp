@@ -706,6 +706,19 @@ VkPipelineStageFlags2 stripGraphicsStages(VkPipelineStageFlags2 stages, bool com
   return computeOnlyQueue ? (stages & ~kGraphicsOnlyStages) : stages;
 }
 
+StageAccess stripGraphicsStageAccess(StageAccess sa, bool computeOnlyQueue) {
+  constexpr VkAccessFlags2 kGraphicsOnlyAccess = VK_ACCESS_2_INDEX_READ_BIT | VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT |
+                                                 VK_ACCESS_2_INPUT_ATTACHMENT_READ_BIT | VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT |
+                                                 VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT |
+                                                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                                                 VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+
+  if (!computeOnlyQueue) {
+    return sa;
+  }
+  return StageAccess{stripGraphicsStages(sa.stage, true), sa.access & ~kGraphicsOnlyAccess};
+}
+
 void emitImageQFOTransfer(VkCommandBuffer cb,
                           const lvk::VulkanImage& img,
                           VkImageLayout oldLayout,
@@ -967,8 +980,8 @@ void lvk::VulkanImage::transitionLayout(VkCommandBuffer commandBuffer,
   dst.stage |= extraDstStage.stage;
   dst.access |= extraDstStage.access;
 
-  src.stage = stripGraphicsStages(src.stage, computeOnlyQueue);
-  dst.stage = stripGraphicsStages(dst.stage, computeOnlyQueue);
+  src = stripGraphicsStageAccess(src, computeOnlyQueue);
+  dst = stripGraphicsStageAccess(dst, computeOnlyQueue);
 
   if (isDepthAttachment() && isResolveAttachment) {
     // https://registry.khronos.org/vulkan/specs/latest/html/vkspec.html#renderpass-resolve-operations
@@ -2335,7 +2348,7 @@ bool lvk::CommandBuffer::acquireOwnershipIfPending(lvk::VulkanImage& img, StageA
   }
 
   // acquire half of a cross-queue ownership transfer: it must replay the producer's release layouts (src/dst) exactly
-  dst.stage = stripGraphicsStages(dst.stage, isComputeOnlyQueue());
+  dst = stripGraphicsStageAccess(dst, isComputeOnlyQueue());
   emitImageQFOTransfer(
       wrapper_->cmdBuf_, img, img.qfotSrcLayout_, img.qfotDstLayout_, StageAccess{}, dst, img.pendingAcquireSrcFamily_, queueFamilyIndex_);
   img.pendingAcquireSrcFamily_ = VK_QUEUE_FAMILY_IGNORED;
