@@ -772,6 +772,7 @@ struct RenderPipelineDesc final {
   CullMode cullMode = lvk::CullMode_None;
   WindingMode frontFace = lvk::WindingMode_CCW;
   PolygonMode polygonMode = lvk::PolygonMode_Fill;
+  bool provokingVertexLast = false; // requires `VK_EXT_provoking_vertex`
 
   uint32_t samplesCount = 1u;
   uint32_t patchControlPoints = 0;
@@ -1349,6 +1350,7 @@ class IContext {
   virtual bool supportsAsyncCompute() const = 0;
   virtual bool supportsDepthBounds() const = 0;
   virtual bool supportsMeshShader() const = 0;
+  virtual bool supportsProvokingVertex() const = 0;
   virtual bool supportsRayTracingPipeline() const = 0;
   virtual bool supportsShaderInterlock() const = 0;
   virtual bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags = TextureUsageBits_Sampled) const = 0;

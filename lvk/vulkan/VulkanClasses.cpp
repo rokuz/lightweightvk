@@ -2199,6 +2199,20 @@ lvk::VulkanPipelineBuilder& lvk::VulkanPipelineBuilder::polygonMode(VkPolygonMod
   return *this;
 }
 
+lvk::VulkanPipelineBuilder& lvk::VulkanPipelineBuilder::provokingVertex(VkProvokingVertexModeEXT mode, bool enable) {
+  // the first vertex is what Vulkan does anyway, so it needs no structure in the rasterization state
+  if (!enable || mode == VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT) {
+    return *this;
+  }
+  provokingVertexState_ = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT,
+      .pNext = rasterizationState_.pNext,
+      .provokingVertexMode = mode,
+  };
+  rasterizationState_.pNext = &provokingVertexState_;
+  return *this;
+}
+
 lvk::VulkanPipelineBuilder& lvk::VulkanPipelineBuilder::vertexInputState(const VkPipelineVertexInputStateCreateInfo& state) {
   vertexInputState_ = state;
   return *this;
@@ -5947,6 +5961,8 @@ VkPipeline lvk::VulkanContext::getVkPipeline(RenderPipelineHandle handle, Render
       .rasterizationSamples(getVulkanSampleCountFlags(desc.samplesCount, getFramebufferMSAABitMask()), desc.minSampleShading)
       .alphaToCoverage(desc.alphaToCoverage)
       .polygonMode(polygonModeToVkPolygonMode(desc.polygonMode))
+      .provokingVertex(desc.provokingVertexLast ? VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT : VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT,
+                       has_EXT_provoking_vertex_)
       .shaderStage(taskModule
                        ? lvk::getPipelineShaderStageCreateInfo(VK_SHADER_STAGE_TASK_BIT_EXT, taskModule->ci, desc.entryPointTask, &si)
                        : VkPipelineShaderStageCreateInfo{.module = VK_NULL_HANDLE})
@@ -8150,6 +8166,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .primitiveFragmentShadingRateMeshShader = vkMeshShaderFeatures_.primitiveFragmentShadingRateMeshShader &&
                                                 has_KHR_fragment_shading_rate_,
   };
+  VkPhysicalDeviceProvokingVertexFeaturesEXT provokingVertexFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT,
+      .provokingVertexLast = VK_TRUE,
+  };
   VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT fragmentShaderInterlockFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT,
       .fragmentShaderSampleInterlock = VK_TRUE,
@@ -8267,6 +8287,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   addOptionalExtension(VK_EXT_DYNAMIC_RENDERING_UNUSED_ATTACHMENTS_EXTENSION_NAME,
                        has_EXT_dynamic_rendering_unused_attachments_,
                        &dynamicRenderingUnusedAttachmentsFeatures);
+  addOptionalExtension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME, has_EXT_provoking_vertex_, &provokingVertexFeatures);
   addOptionalExtension(
       VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, has_EXT_fragment_shader_interlock_, &fragmentShaderInterlockFeatures);
   addOptionalExtension(VK_KHR_SHARED_PRESENTABLE_IMAGE_EXTENSION_NAME, has_KHR_shared_presentable_image_);
