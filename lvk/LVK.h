@@ -1259,6 +1259,9 @@ class IContext {
   virtual bool supportsShaderInterlock() const {
     return false;
   }
+  virtual bool supportsMeshShader() const {
+    return false;
+  }
 
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;

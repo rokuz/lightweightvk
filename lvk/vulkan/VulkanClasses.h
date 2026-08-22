@@ -668,6 +668,9 @@ class VulkanContext final : public IContext {
   bool supportsShaderInterlock() const override {
     return has_EXT_fragment_shader_interlock_;
   }
+  bool supportsMeshShader() const override {
+    return has_EXT_mesh_shader_;
+  }
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
