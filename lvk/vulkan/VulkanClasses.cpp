@@ -2127,6 +2127,19 @@ lvk::VulkanPipelineBuilder& lvk::VulkanPipelineBuilder::polygonMode(VkPolygonMod
   return *this;
 }
 
+lvk::VulkanPipelineBuilder& lvk::VulkanPipelineBuilder::provokingVertex(VkProvokingVertexModeEXT mode) {
+  if (mode == VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT) {
+    return *this;
+  }
+  provokingVertexState_ = {
+      .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_PROVOKING_VERTEX_STATE_CREATE_INFO_EXT,
+      .pNext = rasterizationState_.pNext,
+      .provokingVertexMode = mode,
+  };
+  rasterizationState_.pNext = &provokingVertexState_;
+  return *this;
+}
+
 lvk::VulkanPipelineBuilder& lvk::VulkanPipelineBuilder::vertexInputState(const VkPipelineVertexInputStateCreateInfo& state) {
   vertexInputState_ = state;
   return *this;
@@ -5845,6 +5858,9 @@ VkPipeline lvk::VulkanContext::getVkPipeline(RenderPipelineHandle handle, uint32
       .rasterizationSamples(getVulkanSampleCountFlags(desc.samplesCount, getFramebufferMSAABitMask()), desc.minSampleShading)
       .alphaToCoverage(desc.alphaToCoverage)
       .polygonMode(polygonModeToVkPolygonMode(desc.polygonMode))
+      .provokingVertex(desc.provokingVertex == lvk::ProvokingVertex_Last && has_EXT_provoking_vertex_
+                           ? VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT
+                           : VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT)
       .stencilStateOps(VK_STENCIL_FACE_FRONT_BIT,
                        stencilOpToVkStencilOp(desc.frontFaceStencil.stencilFailureOp),
                        stencilOpToVkStencilOp(desc.frontFaceStencil.depthStencilPassOp),
@@ -7992,6 +8008,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .primitiveFragmentShadingRateMeshShader = vkMeshShaderFeatures_.primitiveFragmentShadingRateMeshShader &&
                                                 has_KHR_fragment_shading_rate_,
   };
+  VkPhysicalDeviceProvokingVertexFeaturesEXT provokingVertexFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT,
+      .provokingVertexLast = VK_TRUE,
+  };
   VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT fragmentShaderInterlockFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT,
       .fragmentShaderSampleInterlock = VK_TRUE,
@@ -8102,6 +8122,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     addOptionalExtension(VK_EXT_FRAGMENT_DENSITY_MAP_EXTENSION_NAME, has_EXT_fragment_density_map_, &fragmentDensityMapFeatures);
     addOptionalExtension(VK_EXT_FRAGMENT_DENSITY_MAP_2_EXTENSION_NAME, has_EXT_fragment_density_map2_, &fragmentDensityMap2Features);
   }
+  addOptionalExtension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME, has_EXT_provoking_vertex_, &provokingVertexFeatures);
   addOptionalExtension(
       VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, has_EXT_fragment_shader_interlock_, &fragmentShaderInterlockFeatures);
   addOptionalExtension(VK_KHR_SHARED_PRESENTABLE_IMAGE_EXTENSION_NAME, has_KHR_shared_presentable_image_);

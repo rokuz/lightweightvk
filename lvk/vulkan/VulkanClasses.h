@@ -291,6 +291,7 @@ class VulkanPipelineBuilder final {
   VulkanPipelineBuilder& cullMode(VkCullModeFlags mode);
   VulkanPipelineBuilder& frontFace(VkFrontFace mode);
   VulkanPipelineBuilder& polygonMode(VkPolygonMode mode);
+  VulkanPipelineBuilder& provokingVertex(VkProvokingVertexModeEXT mode);
   VulkanPipelineBuilder& vertexInputState(const VkPipelineVertexInputStateCreateInfo& state);
   VulkanPipelineBuilder& viewMask(uint32_t mask);
   VulkanPipelineBuilder& colorAttachments(const VkPipelineColorBlendAttachmentState* states,
@@ -322,6 +323,7 @@ class VulkanPipelineBuilder final {
   VkPipelineVertexInputStateCreateInfo vertexInputState_;
   VkPipelineInputAssemblyStateCreateInfo inputAssembly_;
   VkPipelineRasterizationStateCreateInfo rasterizationState_;
+  VkPipelineRasterizationProvokingVertexStateCreateInfoEXT provokingVertexState_ = {};
   VkPipelineMultisampleStateCreateInfo multisampleState_;
   VkPipelineDepthStencilStateCreateInfo depthStencilState_;
   VkPipelineTessellationStateCreateInfo tessellationState_;
@@ -671,6 +673,9 @@ class VulkanContext final : public IContext {
   bool supportsMeshShader() const override {
     return has_EXT_mesh_shader_;
   }
+  bool supportsProvokingVertex() const override {
+    return has_EXT_provoking_vertex_;
+  }
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
@@ -892,6 +897,7 @@ class VulkanContext final : public IContext {
   bool has_EXT_device_fault_ = false;
   bool has_EXT_shader_tile_image = false;
   bool has_EXT_mesh_shader_ = false;
+  bool has_EXT_provoking_vertex_ = false;
   bool has_EXT_fragment_shader_interlock_ = false;
   bool has_MVK_macos_surface_ = false;
   bool has_KHR_shared_presentable_image_ = false;
