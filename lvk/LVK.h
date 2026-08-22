@@ -456,6 +456,11 @@ enum ShadingRateCombinerOp : uint8_t {
   ShadingRateCombinerOp_Mul,
 };
 
+enum ProvokingVertex : uint8_t {
+  ProvokingVertex_First = 0,
+  ProvokingVertex_Last = 1,
+};
+
 enum VertexFormat : uint8_t {
   VertexFormat_Invalid = 0,
 
@@ -772,6 +777,7 @@ struct RenderPipelineDesc final {
   CullMode cullMode = lvk::CullMode_None;
   WindingMode frontFace = lvk::WindingMode_CCW;
   PolygonMode polygonMode = lvk::PolygonMode_Fill;
+  ProvokingVertex provokingVertex = lvk::ProvokingVertex_First;
 
   uint32_t samplesCount = 1u;
   uint32_t patchControlPoints = 0;
@@ -1306,6 +1312,9 @@ class IContext {
     return false;
   }
   virtual bool supportsMeshShader() const {
+    return false;
+  }
+  virtual bool supportsProvokingVertex() const {
     return false;
   }
 
