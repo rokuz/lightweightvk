@@ -1358,6 +1358,10 @@ class IContext {
   virtual bool supportsShaderInterlock() const = 0;
   virtual bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags = TextureUsageBits_Sampled) const = 0;
 
+  // the maximum number of views in a multiview render pass, i.e. 1 unless multiview is supported
+  [[nodiscard]] virtual uint32_t getMultiviewMaxViewCount() const = 0;
+  [[nodiscard]] virtual uint32_t getMultiviewMaxMeshViewCount() const = 0;
+
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;
   virtual bool getQueryPoolResults(QueryPoolHandle pool,

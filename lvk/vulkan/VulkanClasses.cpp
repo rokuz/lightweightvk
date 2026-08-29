@@ -8160,6 +8160,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
       .taskShader = VK_TRUE,
       .meshShader = VK_TRUE,
+      .multiviewMeshShader = vkMeshShaderFeatures_.multiviewMeshShader,
       // VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-primitiveFragmentShadingRateMeshShader-07033 requires `primitiveFragmentShadingRate`
       .primitiveFragmentShadingRateMeshShader = vkMeshShaderFeatures_.primitiveFragmentShadingRateMeshShader &&
                                                 has_KHR_fragment_shading_rate_,

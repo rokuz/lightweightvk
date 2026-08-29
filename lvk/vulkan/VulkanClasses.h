@@ -687,6 +687,14 @@ class VulkanContext final : public IContext {
   bool supportsProvokingVertex() const override {
     return has_EXT_provoking_vertex_;
   }
+  [[nodiscard]] uint32_t getMultiviewMaxViewCount() const override {
+    return vkFeatures11_.multiview ? vkPhysicalDeviceVulkan11Properties_.maxMultiviewViewCount : 1u;
+  }
+  [[nodiscard]] uint32_t getMultiviewMaxMeshViewCount() const override {
+    return has_EXT_mesh_shader_ && vkFeatures11_.multiview && vkMeshShaderFeatures_.multiviewMeshShader
+               ? vkMeshShaderProperties_.maxMeshMultiviewViewCount
+               : 1u;
+  }
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
