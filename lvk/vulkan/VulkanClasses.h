@@ -718,6 +718,7 @@ class VulkanContext final : public IContext {
   uint32_t queryDevices(HWDeviceDesc* outDevices, uint32_t maxOutDevices = 1);
   lvk::Result initContext(const HWDeviceDesc& desc);
   lvk::Result initSwapchain(uint32_t width, uint32_t height) override;
+  lvk::Result recreateSurface(void* window, void* display, uint32_t width, uint32_t height);
 
   BufferHandle createBuffer(VkDeviceSize bufferSize,
                             VkBufferUsageFlags usageFlags,
