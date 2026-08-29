@@ -1271,6 +1271,12 @@ class IContext {
   virtual bool supportsProvokingVertex() const {
     return false;
   }
+  virtual uint32_t getMaxMultiviewViewCount() const {
+    return 1;
+  }
+  virtual uint32_t getMaxMeshMultiviewViewCount() const {
+    return 1;
+  }
 
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;

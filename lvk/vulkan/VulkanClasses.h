@@ -676,6 +676,14 @@ class VulkanContext final : public IContext {
   bool supportsProvokingVertex() const override {
     return has_EXT_provoking_vertex_;
   }
+  uint32_t getMaxMultiviewViewCount() const override {
+    return vkFeatures11_.multiview ? vkPhysicalDeviceVulkan11Properties_.maxMultiviewViewCount : 1u;
+  }
+  uint32_t getMaxMeshMultiviewViewCount() const override {
+    return has_EXT_mesh_shader_ && vkFeatures11_.multiview && multiviewMeshShader_
+               ? vkMeshShaderProperties_.maxMeshMultiviewViewCount
+               : 1u;
+  }
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
@@ -897,6 +905,7 @@ class VulkanContext final : public IContext {
   bool has_EXT_device_fault_ = false;
   bool has_EXT_shader_tile_image = false;
   bool has_EXT_mesh_shader_ = false;
+  bool multiviewMeshShader_ = false;
   bool has_EXT_provoking_vertex_ = false;
   bool has_EXT_fragment_shader_interlock_ = false;
   bool has_MVK_macos_surface_ = false;

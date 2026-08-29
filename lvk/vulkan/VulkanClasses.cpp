@@ -8004,6 +8004,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MESH_SHADER_FEATURES_EXT,
       .taskShader = VK_TRUE,
       .meshShader = VK_TRUE,
+      .multiviewMeshShader = vkMeshShaderFeatures_.multiviewMeshShader,
       // VUID-VkPhysicalDeviceMeshShaderFeaturesEXT-primitiveFragmentShadingRateMeshShader-07033 requires `primitiveFragmentShadingRate`
       .primitiveFragmentShadingRateMeshShader = vkMeshShaderFeatures_.primitiveFragmentShadingRateMeshShader &&
                                                 has_KHR_fragment_shading_rate_,
@@ -8116,6 +8117,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   }
   addOptionalExtension(VK_EXT_SHADER_TILE_IMAGE_EXTENSION_NAME, has_EXT_shader_tile_image, &shaderTileImageFeatures);
   addOptionalExtension(VK_EXT_MESH_SHADER_EXTENSION_NAME, has_EXT_mesh_shader_, &meshShaderFeatures);
+  multiviewMeshShader_ = has_EXT_mesh_shader_ && meshShaderFeatures.multiviewMeshShader;
   // VUID-VkDeviceCreateInfo-fragmentDensityMap-04481/04482/04483: the FSR is mutually exclusive with FDM, so enable only one of them
   if (!config_.enableFragmentShadingRate ||
       !addOptionalExtension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, has_KHR_fragment_shading_rate_, &fragmentShadingRateFeatures)) {
