@@ -7612,12 +7612,12 @@ void lvk::VulkanContext::getBuildInfoBLAS(const AccelStructDesc& desc,
   LVK_ASSERT(desc.numVertices);
   LVK_ASSERT(desc.indexBuffer.valid());
   LVK_ASSERT(desc.vertexBuffer.valid());
-  LVK_ASSERT(desc.transformBuffer.valid());
   LVK_ASSERT(desc.buildRange.primitiveCount);
 
   LVK_ASSERT(buffersPool_.get(desc.indexBuffer)->vkUsageFlags_ & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
   LVK_ASSERT(buffersPool_.get(desc.vertexBuffer)->vkUsageFlags_ & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
-  LVK_ASSERT(buffersPool_.get(desc.transformBuffer)->vkUsageFlags_ & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
+  LVK_ASSERT(!desc.transformBuffer.valid() ||
+             (buffersPool_.get(desc.transformBuffer)->vkUsageFlags_ & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR));
 
   VkGeometryFlagsKHR geometryFlags = 0;
 
@@ -7642,7 +7642,7 @@ void lvk::VulkanContext::getBuildInfoBLAS(const AccelStructDesc& desc,
                       .maxVertex = desc.numVertices - 1,
                       .indexType = indexFormatToVkIndexType(desc.indexFormat),
                       .indexData = {.deviceAddress = gpuAddress(desc.indexBuffer)},
-                      .transformData = {.deviceAddress = gpuAddress(desc.transformBuffer)},
+                      .transformData = {.deviceAddress = desc.transformBuffer.valid() ? gpuAddress(desc.transformBuffer) : 0},
                   },
           },
       .flags = geometryFlags,
