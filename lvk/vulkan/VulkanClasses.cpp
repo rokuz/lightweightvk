@@ -7916,6 +7916,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .runtimeDescriptorArray = VK_TRUE,
       .scalarBlockLayout = VK_TRUE,
       .uniformBufferStandardLayout = VK_TRUE,
+      .shaderSubgroupExtendedTypes = vkFeatures12_.shaderSubgroupExtendedTypes, // enable if supported
       .hostQueryReset = vkFeatures12_.hostQueryReset, // enable if supported
       .timelineSemaphore = VK_TRUE,
       .bufferDeviceAddress = VK_TRUE,
