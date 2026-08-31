@@ -266,7 +266,7 @@ static void resize_callback(ANativeActivity* activity, ANativeWindow* window) {
     app->width_ = w;
     app->height_ = h;
     if (app->ctx_) {
-      app->ctx_->recreateSwapchain(w, h);
+      app->ctx_->initSwapchain(w, h);
       app->depthTexture_.reset();
       LLOGD("Swapchain recreated");
     }
@@ -424,7 +424,7 @@ VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(
         return;
       app->width_ = width;
       app->height_ = height;
-      app->ctx_->recreateSwapchain(width, height);
+      app->ctx_->initSwapchain(width, height);
       app->depthTexture_.reset();
     });
     glfwSetMouseButtonCallback(window_, [](GLFWwindow* window, int button, int action, int mods) {
@@ -724,7 +724,7 @@ void VulkanApp::run(DrawFrameFunc drawFrame) {
         if (width_ != w || height_ != h) {
           width_ = w;
           height_ = h;
-          ctx_->recreateSwapchain(width_, height_);
+          ctx_->initSwapchain(width_, height_);
           depthTexture_.reset();
         }
         break;

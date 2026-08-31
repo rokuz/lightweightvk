@@ -1167,7 +1167,7 @@ void resize() {
   if (!width_ || !height_) {
     return;
   }
-  ctx_->recreateSwapchain(width_, height_);
+  ctx_->initSwapchain(width_, height_);
   createOffscreenFramebuffer();
 }
 

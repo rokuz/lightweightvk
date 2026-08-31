@@ -250,6 +250,13 @@ enum PresentMode : uint8_t {
   PresentMode_FIFO_Latest_Ready, // VK_KHR_present_mode_fifo_latest_ready
 };
 
+enum SurfaceTransform : uint8_t {
+  SurfaceTransform_Identity = 0,
+  SurfaceTransform_Rotate90,
+  SurfaceTransform_Rotate180,
+  SurfaceTransform_Rotate270,
+};
+
 enum TextureType : uint8_t {
   TextureType_2D,
   TextureType_3D,
@@ -1329,12 +1336,13 @@ class IContext {
   [[nodiscard]] virtual Format getFormat(TextureHandle handle) const = 0;
 #pragma endregion
 
+  virtual Result initSwapchain(uint32_t width, uint32_t height) = 0; // recreates the existing swapchain as well
   virtual TextureHandle getCurrentSwapchainTexture() = 0;
   virtual Format getSwapchainFormat() const = 0;
   virtual ColorSpace getSwapchainColorSpace() const = 0;
   virtual uint32_t getSwapchainCurrentImageIndex() const = 0;
   virtual uint32_t getNumSwapchainImages() const = 0;
-  virtual void recreateSwapchain(int newWidth, int newHeight) = 0;
+  [[nodiscard]] virtual SurfaceTransform getSwapchainSurfaceTransform() const = 0;
   [[nodiscard]] virtual bool setCurrentPresentMode(PresentMode mode) = 0; // VK_KHR_swapchain_maintenance1
   [[nodiscard]] virtual PresentMode getCurrentPresentMode() const = 0;
 
@@ -1406,6 +1414,7 @@ struct ContextConfig {
   bool enableValidationSync = true;
   bool generateSPIRVDebugInfo = true;
   lvk::ColorSpace swapchainRequestedColorSpace = lvk::ColorSpace_SRGB_NONLINEAR;
+  bool swapchainUseSurfacePreTransform = false; // apps should rotate their own output based on getSwapchainSurfaceTransform()
   // owned by the application - should be alive until createVulkanContextWithSwapchain() returns
   const void* pipelineCacheData = nullptr;
   size_t pipelineCacheDataSize = 0;
