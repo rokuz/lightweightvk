@@ -1272,6 +1272,11 @@ lvk::VulkanSwapchain::VulkanSwapchain(VulkanContext& ctx, uint32_t width, uint32
   };
   vkGetPhysicalDeviceFormatProperties2(ctx.getVkPhysicalDevice(), surfaceFormat_.format, &props);
 
+  preTransform_ = caps.surfaceCapabilities.currentTransform;
+  if (preTransform_ & (VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR | VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR)) {
+    std::swap(width, height);
+  }
+
   // trim the image extent
   width_ = width = std::min(width, caps.surfaceCapabilities.maxImageExtent.width);
   height_ = height = std::min(height, caps.surfaceCapabilities.maxImageExtent.height);
@@ -1363,11 +1368,7 @@ lvk::VulkanSwapchain::VulkanSwapchain(VulkanContext& ctx, uint32_t width, uint32
       .imageSharingMode = VK_SHARING_MODE_EXCLUSIVE,
       .queueFamilyIndexCount = 1,
       .pQueueFamilyIndices = &ctx.deviceQueues_.graphicsQueueFamilyIndex,
-#if defined(ANDROID)
-      .preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR,
-#else
-      .preTransform = ctx.deviceSurfaceCaps_.surfaceCapabilities.currentTransform,
-#endif
+      .preTransform = preTransform_,
       .compositeAlpha = isCompositeAlphaOpaqueSupported ? VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR : VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR,
       .presentMode = currentPresentMode_,
       .clipped = VK_TRUE,
@@ -1537,6 +1538,19 @@ uint32_t lvk::VulkanSwapchain::getNumSwapchainImages() const {
 
 uint32_t lvk::VulkanSwapchain::getSwapchainCurrentImageIndex() const {
   return currentImageIndex_;
+}
+
+lvk::SurfaceTransform lvk::VulkanSwapchain::getSurfaceTransform() const {
+  switch (preTransform_) {
+  case VK_SURFACE_TRANSFORM_ROTATE_90_BIT_KHR:
+    return SurfaceTransform_Rotate90;
+  case VK_SURFACE_TRANSFORM_ROTATE_180_BIT_KHR:
+    return SurfaceTransform_Rotate180;
+  case VK_SURFACE_TRANSFORM_ROTATE_270_BIT_KHR:
+    return SurfaceTransform_Rotate270;
+  default:
+    return SurfaceTransform_Identity;
+  }
 }
 
 bool lvk::VulkanSwapchain::setCurrentPresentMode(VkPresentModeKHR mode) {
@@ -7127,6 +7141,10 @@ lvk::TextureHandle lvk::VulkanContext::getCurrentSwapchainTexture() {
   LVK_ASSERT_MSG(texturesPool_.get(tex)->vkImageFormat_ != VK_FORMAT_UNDEFINED, "Invalid image format");
 
   return tex;
+}
+
+lvk::SurfaceTransform lvk::VulkanContext::getSwapchainSurfaceTransform() const {
+  return hasSwapchain() ? swapchain_->getSurfaceTransform() : SurfaceTransform_Identity;
 }
 
 uint32_t lvk::VulkanContext::getSwapchainCurrentImageIndex() const {

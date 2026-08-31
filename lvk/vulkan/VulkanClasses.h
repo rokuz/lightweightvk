@@ -142,6 +142,7 @@ class VulkanSwapchain final {
   const VkSurfaceFormatKHR& getSurfaceFormat() const;
   uint32_t getSwapchainCurrentImageIndex() const;
   uint32_t getNumSwapchainImages() const;
+  SurfaceTransform getSurfaceTransform() const;
   // runtime present mode switching without swapchain recreation (VK_KHR_swapchain_maintenance1), returns `false` if the mode cannot be set
   [[nodiscard]] bool setCurrentPresentMode(VkPresentModeKHR mode);
 
@@ -157,6 +158,7 @@ class VulkanSwapchain final {
   bool getNextImage_ = true;
   VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
   VkSurfaceFormatKHR surfaceFormat_ = {.format = VK_FORMAT_UNDEFINED};
+  VkSurfaceTransformFlagBitsKHR preTransform_ = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
   VkPresentModeKHR currentPresentMode_ = VK_PRESENT_MODE_FIFO_KHR; // rewritten at swapchain creation
   VkPresentModeKHR registeredPresentModes_[kMaxPresentModes] = {};
   uint32_t numRegisteredPresentModes_ = 0;
@@ -651,6 +653,7 @@ class VulkanContext final : public IContext {
   Format getSwapchainFormat() const override;
   ColorSpace getSwapchainColorSpace() const override;
   uint32_t getSwapchainCurrentImageIndex() const override;
+  SurfaceTransform getSwapchainSurfaceTransform() const override;
   uint32_t getNumSwapchainImages() const override;
   void recreateSwapchain(int newWidth, int newHeight) override;
   bool setCurrentPresentMode(PresentMode mode) override;
