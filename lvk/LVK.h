@@ -1295,7 +1295,7 @@ class IContext {
   virtual bool isExtensionEnabled(const char* ext) const = 0;
   virtual bool supportsAsyncCompute() const = 0;
   virtual bool supportsDepthBounds() const = 0;
-  virtual bool supportsTextureFormat(Format format) const = 0;
+  virtual bool supportsTextureFormat(Format format, uint8_t usageFlags = TextureUsageBits_Sampled) const = 0;
 
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;

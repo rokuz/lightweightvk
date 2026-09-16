@@ -9196,14 +9196,43 @@ bool lvk::VulkanContext::isExtensionEnabled(const char* ext) const {
   return false;
 }
 
-bool lvk::VulkanContext::supportsTextureFormat(Format format) const {
+bool lvk::VulkanContext::supportsTextureFormat(Format format, uint8_t usageFlags) const {
   const VkFormat vkFormat = lvk::formatToVkFormat(format);
+
   if (vkFormat == VK_FORMAT_UNDEFINED) {
     return false;
   }
+  if ((usageFlags & lvk::TextureUsageBits_FragmentDensityMap) && !has_EXT_fragment_density_map_) {
+    return false;
+  }
+  if ((usageFlags & lvk::TextureUsageBits_ShadingRateAttachment) && !has_KHR_fragment_shading_rate_) {
+    return false;
+  }
+
+  VkFormatFeatureFlags requiredFeatures = 0;
+
+  if (usageFlags & lvk::TextureUsageBits_Sampled) {
+    requiredFeatures |= VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
+  }
+  if (usageFlags & lvk::TextureUsageBits_Storage) {
+    requiredFeatures |= VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT;
+  }
+  if (usageFlags & (lvk::TextureUsageBits_Attachment | lvk::TextureUsageBits_InputAttachment)) {
+    // an input attachment needs the same feature bit as the attachment it reads
+    requiredFeatures |= lvk::isDepthOrStencilFormat(format) ? VK_FORMAT_FEATURE_DEPTH_STENCIL_ATTACHMENT_BIT
+                                                            : VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT;
+  }
+  if (usageFlags & lvk::TextureUsageBits_FragmentDensityMap) {
+    requiredFeatures |= VK_FORMAT_FEATURE_FRAGMENT_DENSITY_MAP_BIT_EXT;
+  }
+  if (usageFlags & lvk::TextureUsageBits_ShadingRateAttachment) {
+    requiredFeatures |= VK_FORMAT_FEATURE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR;
+  }
+
   VkFormatProperties2 props = {
       .sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2,
   };
   vkGetPhysicalDeviceFormatProperties2(getVkPhysicalDevice(), vkFormat, &props);
-  return (props.formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0;
+
+  return (props.formatProperties.optimalTilingFeatures & requiredFeatures) == requiredFeatures;
 }
