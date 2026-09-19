@@ -741,6 +741,53 @@ void transitionToColorAttachment(VkCommandBuffer buffer, lvk::VulkanImage* color
                              VkImageSubresourceRange{VK_IMAGE_ASPECT_COLOR_BIT, 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS});
 }
 
+VkPipelineStageFlags2 pipelineStageFlagsToVkPipelineStageFlags2(lvk::PipelineStageFlags stages) {
+  VkPipelineStageFlags2 flags = 0;
+  // clang-format off
+  if (stages & lvk::PipelineStageBits_DrawIndirect    ) flags |= VK_PIPELINE_STAGE_2_DRAW_INDIRECT_BIT;
+  if (stages & lvk::PipelineStageBits_VertexInput     ) flags |= VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT;
+  if (stages & lvk::PipelineStageBits_Vertex          ) flags |= VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT |
+                                                                 VK_PIPELINE_STAGE_2_TESSELLATION_CONTROL_SHADER_BIT |
+                                                                 VK_PIPELINE_STAGE_2_TESSELLATION_EVALUATION_SHADER_BIT |
+                                                                 VK_PIPELINE_STAGE_2_GEOMETRY_SHADER_BIT;
+  if (stages & lvk::PipelineStageBits_Task            ) flags |= VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT;
+  if (stages & lvk::PipelineStageBits_Mesh            ) flags |= VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT;
+  if (stages & lvk::PipelineStageBits_DepthStencil    ) flags |= VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT |
+                                                                 VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT;
+  if (stages & lvk::PipelineStageBits_Fragment        ) flags |= VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT;
+  if (stages & lvk::PipelineStageBits_ColorAttachment ) flags |= VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT;
+  if (stages & lvk::PipelineStageBits_Compute         ) flags |= VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT;
+  if (stages & lvk::PipelineStageBits_RayTracing      ) flags |= VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR;
+  if (stages & lvk::PipelineStageBits_AccelStructBuild) flags |= VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR;
+  if (stages & lvk::PipelineStageBits_Transfer        ) flags |= VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT;
+  if (stages & lvk::PipelineStageBits_Host            ) flags |= VK_PIPELINE_STAGE_2_HOST_BIT;
+  if (stages & lvk::PipelineStageBits_AllCommands     ) flags |= VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT;
+  // clang-format on
+  return flags;
+}
+
+VkAccessFlags2 accessFlagsToVkAccessFlags2(lvk::AccessFlags access) {
+  VkAccessFlags2 flags = 0;
+  // clang-format off
+  if (access & lvk::AccessBits_IndirectRead       ) flags |= VK_ACCESS_2_INDIRECT_COMMAND_READ_BIT;
+  if (access & lvk::AccessBits_IndexRead          ) flags |= VK_ACCESS_2_INDEX_READ_BIT;
+  if (access & lvk::AccessBits_VertexAttributeRead) flags |= VK_ACCESS_2_VERTEX_ATTRIBUTE_READ_BIT;
+  if (access & lvk::AccessBits_ShaderRead         ) flags |= VK_ACCESS_2_SHADER_READ_BIT;
+  if (access & lvk::AccessBits_ShaderWrite        ) flags |= VK_ACCESS_2_SHADER_WRITE_BIT;
+  if (access & lvk::AccessBits_ColorRead          ) flags |= VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT;
+  if (access & lvk::AccessBits_ColorWrite         ) flags |= VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT;
+  if (access & lvk::AccessBits_DepthStencilRead   ) flags |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT;
+  if (access & lvk::AccessBits_DepthStencilWrite  ) flags |= VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+  if (access & lvk::AccessBits_TransferRead       ) flags |= VK_ACCESS_2_TRANSFER_READ_BIT;
+  if (access & lvk::AccessBits_TransferWrite      ) flags |= VK_ACCESS_2_TRANSFER_WRITE_BIT;
+  if (access & lvk::AccessBits_HostRead           ) flags |= VK_ACCESS_2_HOST_READ_BIT;
+  if (access & lvk::AccessBits_HostWrite          ) flags |= VK_ACCESS_2_HOST_WRITE_BIT;
+  if (access & lvk::AccessBits_AccelStructRead    ) flags |= VK_ACCESS_2_ACCELERATION_STRUCTURE_READ_BIT_KHR;
+  if (access & lvk::AccessBits_AccelStructWrite   ) flags |= VK_ACCESS_2_ACCELERATION_STRUCTURE_WRITE_BIT_KHR;
+  // clang-format on
+  return flags;
+}
+
 VkPipelineStageFlags2 stripGraphicsStages(VkPipelineStageFlags2 stages, bool computeOnlyQueue) {
   constexpr VkPipelineStageFlags2 kGraphicsOnlyStages =
       VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_VERTEX_ATTRIBUTE_INPUT_BIT | VK_PIPELINE_STAGE_2_INDEX_INPUT_BIT |
@@ -2336,6 +2383,47 @@ bool lvk::CommandBuffer::acquireOwnershipIfPending(lvk::VulkanImage& img, StageA
   img.ownerQueueFamily_ = queueFamilyIndex_;
   img.vkImageLayout_ = img.qfotDstLayout_;
   return true;
+}
+
+void lvk::CommandBuffer::cmdBarrier(const Barrier& barrier) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_BARRIER);
+
+  LVK_ASSERT_MSG(!isRendering_, "cmdBarrier() must be called outside cmdBeginRendering()/cmdEndRendering()");
+
+  const PipelineStageFlags allStages = barrier.srcStages | barrier.dstStages;
+
+  LVK_ASSERT_MSG(!(allStages & (lvk::PipelineStageBits_RayTracing | lvk::PipelineStageBits_AccelStructBuild)) ||
+                     ctx_->has_KHR_acceleration_structure_,
+                 "Ray tracing stages require VK_KHR_acceleration_structure");
+  LVK_ASSERT_MSG(!(allStages & (lvk::PipelineStageBits_Task | lvk::PipelineStageBits_Mesh)) || ctx_->has_EXT_mesh_shader_,
+                 "Task and mesh stages require VK_EXT_mesh_shader");
+
+  const bool computeOnlyQueue = isComputeOnlyQueue();
+
+  // a compute-only queue supports neither the graphics stages nor the access types which belong to them
+  StageAccess src = stripGraphicsStageAccess(
+      {pipelineStageFlagsToVkPipelineStageFlags2(barrier.srcStages), accessFlagsToVkAccessFlags2(barrier.srcAccess)}, computeOnlyQueue);
+  StageAccess dst = stripGraphicsStageAccess(
+      {pipelineStageFlagsToVkPipelineStageFlags2(barrier.dstStages), accessFlagsToVkAccessFlags2(barrier.dstAccess)}, computeOnlyQueue);
+
+  // an access mask needs at least one stage which supports it, so a fully stripped stage mask takes its access with it
+  if (!src.stage) src.access = VK_ACCESS_2_NONE;
+  if (!dst.stage) dst.access = VK_ACCESS_2_NONE;
+
+  const VkMemoryBarrier2 memoryBarrier = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+      .srcStageMask = src.stage,
+      .srcAccessMask = src.access,
+      .dstStageMask = dst.stage,
+      .dstAccessMask = dst.access,
+  };
+  const VkDependencyInfo depInfo = {
+      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+      .memoryBarrierCount = 1,
+      .pMemoryBarriers = &memoryBarrier,
+  };
+
+  vkCmdPipelineBarrier2(wrapper_->cmdBuf_, &depInfo);
 }
 
 void lvk::CommandBuffer::cmdTransitionToGeneral(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const {

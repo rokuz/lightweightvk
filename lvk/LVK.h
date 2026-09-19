@@ -917,6 +917,45 @@ enum TextureUsageBits : uint8_t {
 
 using TextureUsageFlags = uint8_t;
 
+// Pipeline stages for `ICommandBuffer::cmdBarrier()`
+enum PipelineStageBits : uint32_t {
+  PipelineStageBits_DrawIndirect = 1 << 0,
+  PipelineStageBits_VertexInput = 1 << 1, // index/vertex attribute fetch
+  PipelineStageBits_Vertex = 1 << 2, // vertex/tessellation/geometry shaders
+  PipelineStageBits_Task = 1 << 3,
+  PipelineStageBits_Mesh = 1 << 4,
+  PipelineStageBits_DepthStencil = 1 << 5, // early/late fragment tests
+  PipelineStageBits_Fragment = 1 << 6,
+  PipelineStageBits_ColorAttachment = 1 << 7,
+  PipelineStageBits_Compute = 1 << 8,
+  PipelineStageBits_RayTracing = 1 << 9,
+  PipelineStageBits_AccelStructBuild = 1 << 10,
+  PipelineStageBits_Transfer = 1 << 11,
+  PipelineStageBits_Host = 1 << 12,
+  PipelineStageBits_AllCommands = 1 << 13,
+};
+using PipelineStageFlags = uint32_t;
+
+// Memory access types for `ICommandBuffer::cmdBarrier()`
+enum AccessBits : uint32_t {
+  AccessBits_IndirectRead = 1 << 0,
+  AccessBits_IndexRead = 1 << 1,
+  AccessBits_VertexAttributeRead = 1 << 2,
+  AccessBits_ShaderRead = 1 << 3,
+  AccessBits_ShaderWrite = 1 << 4,
+  AccessBits_ColorRead = 1 << 5,
+  AccessBits_ColorWrite = 1 << 6,
+  AccessBits_DepthStencilRead = 1 << 7,
+  AccessBits_DepthStencilWrite = 1 << 8,
+  AccessBits_TransferRead = 1 << 9,
+  AccessBits_TransferWrite = 1 << 10,
+  AccessBits_HostRead = 1 << 11,
+  AccessBits_HostWrite = 1 << 12,
+  AccessBits_AccelStructRead = 1 << 13,
+  AccessBits_AccelStructWrite = 1 << 14,
+};
+using AccessFlags = uint32_t;
+
 enum Swizzle : uint8_t {
   Swizzle_Default = 0,
   Swizzle_0,
@@ -1086,10 +1125,20 @@ struct Dependencies {
   ldr::Span<SubmitHandle> waitGraphics = {}; // graphics work an async-compute submit must wait for
 };
 
+// A global memory and execution barrier for the hazards not covered by `Dependencies`
+// Image layouts are not changed by this: use `Dependencies` or `cmdTransitionToShaderReadOnly()`
+struct Barrier {
+  PipelineStageFlags srcStages = PipelineStageBits_AllCommands;
+  AccessFlags srcAccess = 0;
+  PipelineStageFlags dstStages = PipelineStageBits_AllCommands;
+  AccessFlags dstAccess = 0;
+};
+
 class ICommandBuffer {
  public:
   virtual ~ICommandBuffer() = default;
 
+  virtual void cmdBarrier(const Barrier& barrier) = 0; // don't call between cmdBeginRendering()/cmdEndRendering()
   virtual void cmdTransitionToGeneral(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const = 0;
   virtual void cmdTransitionToShaderReadOnly(const ldr::Span<TextureHandle>& textures, lvk::ShaderStage extraDstStage) const = 0;
   // no extraDstStage parameter: this is only used within a render pass
