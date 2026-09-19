@@ -875,8 +875,10 @@ enum BufferUsageBits : uint8_t {
   BufferUsageBits_AccelStructStorage = 1 << 7
 };
 
+using BufferUsageFlags = uint8_t;
+
 struct BufferDesc final {
-  uint8_t usage = 0;
+  BufferUsageFlags usage = 0;
   StorageType storage = StorageType_HostVisible;
   size_t size = 0;
   const void* data = nullptr;
@@ -913,6 +915,8 @@ enum TextureUsageBits : uint8_t {
   TextureUsageBits_ShadingRateAttachment = 1 << 5,
 };
 
+using TextureUsageFlags = uint8_t;
+
 enum Swizzle : uint8_t {
   Swizzle_Default = 0,
   Swizzle_0,
@@ -940,7 +944,7 @@ struct TextureDesc {
   Dimensions dimensions = {1, 1, 1};
   uint32_t numLayers = 1;
   uint32_t numSamples = 1;
-  uint8_t usage = TextureUsageBits_Sampled;
+  TextureUsageFlags usage = TextureUsageBits_Sampled;
   uint32_t numMipLevels = 1;
   StorageType storage = StorageType_Device;
   ComponentMapping components = {};
@@ -1295,7 +1299,7 @@ class IContext {
   virtual bool isExtensionEnabled(const char* ext) const = 0;
   virtual bool supportsAsyncCompute() const = 0;
   virtual bool supportsDepthBounds() const = 0;
-  virtual bool supportsTextureFormat(Format format, uint8_t usageFlags = TextureUsageBits_Sampled) const = 0;
+  virtual bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags = TextureUsageBits_Sampled) const = 0;
 
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;

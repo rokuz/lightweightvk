@@ -9196,7 +9196,7 @@ bool lvk::VulkanContext::isExtensionEnabled(const char* ext) const {
   return false;
 }
 
-bool lvk::VulkanContext::supportsTextureFormat(Format format, uint8_t usageFlags) const {
+bool lvk::VulkanContext::supportsTextureFormat(Format format, TextureUsageFlags usageFlags) const {
   const VkFormat vkFormat = lvk::formatToVkFormat(format);
 
   if (vkFormat == VK_FORMAT_UNDEFINED) {
