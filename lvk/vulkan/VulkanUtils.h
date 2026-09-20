@@ -90,7 +90,8 @@ VkResult allocateMemory2(VkPhysicalDevice physDev,
                          const VkMemoryRequirements2* memRequirements,
                          VkMemoryPropertyFlags props,
                          VkDeviceMemory* outMemory,
-                         VkMemoryPropertyFlags* outMemoryProperties = nullptr);
+                         VkMemoryPropertyFlags* outMemoryProperties = nullptr,
+                         const void* pNext = nullptr);
 
 glslang_resource_t getGlslangResource(const VkPhysicalDeviceLimits& limits,
                                       const VkPhysicalDeviceMeshShaderPropertiesEXT* meshShader = nullptr);
@@ -98,7 +99,8 @@ Result compileShaderGlslang(lvk::ShaderStage stage,
                             const char* code,
                             std::vector<uint8_t>* outSPIRV,
                             bool generateDebugInfo,
-                            const glslang_resource_t* glslLangResource = nullptr);
+                            const glslang_resource_t* glslLangResource = nullptr,
+                            bool optimize = true);
 Result compileShaderSlang(slang::IGlobalSession*& slangGlobalSession,
                           lvk::ShaderStage stage,
                           const char* code,
