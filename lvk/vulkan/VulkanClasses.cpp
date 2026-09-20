@@ -2598,7 +2598,7 @@ void lvk::CommandBuffer::cmdDispatch(const Dimensions& groupCount, const Depende
   }
   tensorBarriers(deps.tensors,
                  VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
 
   vkCmdDispatch(wrapper_->cmdBuf_, groupCount.width, groupCount.height, groupCount.depth);
@@ -2625,7 +2625,7 @@ void lvk::CommandBuffer::cmdDispatchIndirect(BufferHandle indirectBuffer, size_t
   }
   tensorBarriers(deps.tensors,
                  VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
-                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
                  VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
 
   const lvk::VulkanBuffer* indBuf = ctx_->buffersPool_.get(indirectBuffer);
@@ -2774,7 +2774,7 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
     bufferBarrier(deps.buffers[i], VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, dstStageFlags);
   }
   tensorBarriers(deps.tensors,
-                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
                  VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
 
   const uint32_t numFbColorAttachments = fb.getNumColorAttachments();
@@ -3528,7 +3528,7 @@ void lvk::CommandBuffer::cmdTraceRays(uint32_t width, uint32_t height, uint32_t 
                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
   }
   tensorBarriers(deps.tensors,
-                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT,
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
                  VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
 
   vkCmdTraceRaysKHR(
@@ -4805,6 +4805,9 @@ lvk::VulkanContext::~VulkanContext() {
   if (tensorsPool_.numObjects()) {
     LLOGW("Leaked %u tensors\n", tensorsPool_.numObjects());
   }
+  if (dataGraphPipelinesPool_.numObjects()) {
+    LLOGW("Leaked %u data graph pipelines\n", dataGraphPipelinesPool_.numObjects());
+  }
 
   // manually destroy the dummy sampler
   vkDestroySampler(vkDevice_, samplersPool_.objects_.front(), nullptr);
@@ -4814,6 +4817,7 @@ lvk::VulkanContext::~VulkanContext() {
   shaderModulesPool_.clear();
   texturesPool_.clear();
   tensorsPool_.clear();
+  dataGraphPipelinesPool_.clear();
 
   immediateCompute_.reset(nullptr);
   immediate_.reset(nullptr);
@@ -7263,8 +7267,9 @@ lvk::Holder<lvk::ShaderModuleHandle> lvk::VulkanContext::createShaderModule(cons
       return false;
     return strstr(code, "[shader(\"") != nullptr;
   };
+  const bool reflect = desc.stage != Stage_DataGraph;
   ShaderModuleState sm =
-      desc.dataSize ? createShaderModuleFromSPIRV(desc.data, desc.dataSize, desc.debugName, &result) // binary
+      desc.dataSize ? createShaderModuleFromSPIRV(desc.data, desc.dataSize, desc.debugName, &result, reflect)
       : isSlang(desc.data) // text
           ? createShaderModuleFromSlang(desc.stage, desc.data, desc.entryPointName, desc.optimizeSPIRV, desc.debugName, &result)
           : createShaderModuleFromGLSL(desc.stage, desc.data, desc.optimizeSPIRV, desc.debugName, &result);
@@ -7281,7 +7286,8 @@ lvk::Holder<lvk::ShaderModuleHandle> lvk::VulkanContext::createShaderModule(cons
 lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromSPIRV(const void* spirv,
                                                                        size_t numBytes,
                                                                        const char* debugName,
-                                                                       Result* outResult) const {
+                                                                       Result* outResult,
+                                                                       bool reflect) const {
   (void)debugName;
 
   if (!spirv || !numBytes) {
@@ -7289,18 +7295,20 @@ lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromSPIRV(const voi
     return {};
   }
 
-  SpvReflectShaderModule mdl;
-  const SpvReflectResult result = spvReflectCreateShaderModule(numBytes, spirv, &mdl);
-  (void)LVK_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
-  SCOPE_EXIT {
-    spvReflectDestroyShaderModule(&mdl);
-  };
-
   uint32_t pushConstantsSize = 0;
 
-  for (uint32_t i = 0; i < mdl.push_constant_block_count; ++i) {
-    const SpvReflectBlockVariable& block = mdl.push_constant_blocks[i];
-    pushConstantsSize = std::max(pushConstantsSize, block.offset + block.size);
+  if (reflect) {
+    SpvReflectShaderModule mdl;
+    const SpvReflectResult result = spvReflectCreateShaderModule(numBytes, spirv, &mdl);
+    (void)LVK_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
+    SCOPE_EXIT {
+      spvReflectDestroyShaderModule(&mdl);
+    };
+
+    for (uint32_t i = 0; i < mdl.push_constant_block_count; ++i) {
+      const SpvReflectBlockVariable& block = mdl.push_constant_blocks[i];
+      pushConstantsSize = std::max(pushConstantsSize, block.offset + block.size);
+    }
   }
 
   const VkShaderModuleCreateInfo ci = {
@@ -10327,7 +10335,10 @@ VkAccessFlags2 tensorAccessFlagsForStages(VkPipelineStageFlags2 stages) {
   if (stages & VK_PIPELINE_STAGE_2_TRANSFER_BIT) {
     access |= VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
   }
-  if (stages & ~VK_PIPELINE_STAGE_2_TRANSFER_BIT) {
+  if (stages & VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM) {
+    access |= VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM | VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM;
+  }
+  if (stages & ~(VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM)) {
     access |= VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
   }
   return access;
@@ -10504,6 +10515,7 @@ lvk::TensorHandle lvk::VulkanContext::createTensor(const VkTensorDescriptionARM&
       lvk::setResultFrom(outResult, allocResult);
       return {};
     }
+    tensor.vkMemoryOffset_ = 0;
     tensor.isCoherentMemory_ = (allocMemFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
     if (isHostVisible) {
       VK_ASSERT(vkMapMemory(vkDevice_, tensor.vkMemory_, 0, VK_WHOLE_SIZE, 0, &tensor.mappedPtr_));
@@ -10560,11 +10572,37 @@ lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensorBufferAliasing(Bu
     Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Invalid buffer to alias the tensor");
     return {};
   }
-  // buffer memory has no tiling, and it is host-visible whenever the buffer is
+  const bool needsOptimalTensor = (desc.usage & TensorUsageBits_DataGraph) &&
+                                  !(getTensorFormatSupport(desc.format, TensorTiling_Linear) & TensorUsageBits_DataGraph);
   TensorDesc aliasDesc = desc;
   aliasDesc.tiling = TensorTiling_Linear;
   aliasDesc.storage = (buf->vkMemFlags_ & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? StorageType_HostVisible : StorageType_Device;
-  return createTensorImpl(aliasDesc, buffer, bufferOffset, {}, debugName, outResult);
+  if (needsOptimalTensor) {
+    aliasDesc.usage =
+        (TensorUsageFlags)((desc.usage & ~TensorUsageBits_DataGraph) | TensorUsageBits_TransferSrc | TensorUsageBits_TransferDst);
+  }
+  Holder<TensorHandle> tensor = createTensorImpl(aliasDesc, buffer, bufferOffset, {}, debugName, outResult);
+  if (!tensor.valid() || !needsOptimalTensor) {
+    return tensor;
+  }
+  TensorDesc optimalDesc = {
+      .format = desc.format,
+      .rank = desc.rank,
+      .tiling = TensorTiling_Optimal,
+      .usage = TensorUsageBits_DataGraph | TensorUsageBits_TransferSrc | TensorUsageBits_TransferDst,
+  };
+  for (uint32_t i = 0; i != desc.rank; i++) {
+    optimalDesc.dimensions[i] = desc.dimensions[i];
+  }
+  Result result;
+  Holder<TensorHandle> optimalTensor = createTensorImpl(optimalDesc, {}, 0, {}, debugName, &result);
+  if (!result.isOk()) {
+    Result::setResult(outResult, result);
+    return {};
+  }
+  LLOGL("Tensor `%s`: linear tensors cannot be used by data graphs, the graphs use an optimally tiled copy\n", debugName ? debugName : "");
+  tensorsPool_.get(tensor)->optimalTensor_ = optimalTensor.release();
+  return tensor;
 }
 
 lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensorTextureAliasing(TextureHandle texture,
@@ -10712,6 +10750,10 @@ void lvk::VulkanContext::destroy(lvk::TensorHandle handle) {
 
   if (!tensor || !tensor->vkTensor_) {
     return;
+  }
+
+  if (tensor->optimalTensor_.valid()) {
+    destroy(tensor->optimalTensor_);
   }
 
   SCOPE_EXIT {
@@ -10911,7 +10953,8 @@ lvk::TensorDesc lvk::VulkanContext::getTensorDesc(lvk::TensorHandle handle) cons
       .format = lvk::vkFormatToFormat(tensor->vkFormat_),
       .rank = tensor->rank_,
       .tiling = tensor->isLinear() ? TensorTiling_Linear : TensorTiling_Optimal,
-      .usage = vkTensorUsageToTensorUsage(tensor->vkUsageFlags_),
+      .usage = (TensorUsageFlags)(vkTensorUsageToTensorUsage(tensor->vkUsageFlags_) |
+                                  (tensor->optimalTensor_.valid() ? TensorUsageBits_DataGraph : 0)),
       .storage = (tensor->vkMemFlags_ & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? StorageType_HostVisible : StorageType_Device,
   };
   for (uint32_t i = 0; i != tensor->rank_; i++) {
@@ -10919,6 +10962,455 @@ lvk::TensorDesc lvk::VulkanContext::getTensorDesc(lvk::TensorHandle handle) cons
     desc.strides[i] = tensor->strides_[i];
   }
   return desc;
+}
+
+VkDescriptorSet lvk::VulkanContext::getTensorDescriptorSet(DataGraphPipelineState& state, const ldr::Span<const TensorHandle>& tensors) {
+  const uint32_t numTensors = (uint32_t)tensors.size();
+
+  if (!LVK_VERIFY(numTensors <= LVK_MAX_DATA_GRAPH_TENSORS)) {
+    return VK_NULL_HANDLE;
+  }
+
+  for (const DataGraphPipelineState::TensorSet& set : state.tensorSets_) {
+    if (set.numTensors == numTensors && std::equal(tensors.begin(), tensors.end(), set.tensors)) {
+      return set.dset;
+    }
+  }
+
+  if (!LVK_VERIFY(state.tensorSets_.size() < LVK_MAX_DATA_GRAPH_TENSOR_SETS)) {
+    LLOGW("Data graph `%s`: dispatched with more than %u different sets of tensors (see LVK_MAX_DATA_GRAPH_TENSOR_SETS)\n",
+          state.debugName_.c_str(),
+          LVK_MAX_DATA_GRAPH_TENSOR_SETS);
+    return VK_NULL_HANDLE;
+  }
+
+  const VkDescriptorSetAllocateInfo dsai = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = state.dpool_,
+      .descriptorSetCount = 1,
+      .pSetLayouts = &state.dsl_,
+  };
+  VkDescriptorSet dset = VK_NULL_HANDLE;
+  if (vkAllocateDescriptorSets(vkDevice_, &dsai, &dset) != VK_SUCCESS) {
+    return VK_NULL_HANDLE;
+  }
+
+  VkWriteDescriptorSetTensorARM writeTensors[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+  VkWriteDescriptorSet writes[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+  for (uint32_t i = 0; i != numTensors; i++) {
+    const VulkanTensor* tensor = tensorsPool_.get(tensors[i]);
+    writeTensors[i] = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_TENSOR_ARM,
+        .tensorViewCount = 1,
+        .pTensorViews = &tensor->vkTensorView_,
+    };
+    writes[i] = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = &writeTensors[i],
+        .dstSet = dset,
+        .dstBinding = state.bindings_[i],
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_TENSOR_ARM,
+    };
+  }
+  if (numTensors) {
+    vkUpdateDescriptorSets(vkDevice_, numTensors, writes, 0, nullptr);
+  }
+
+  DataGraphPipelineState::TensorSet& set = state.tensorSets_.emplace_back();
+  std::copy(tensors.begin(), tensors.end(), set.tensors);
+  set.numTensors = numTensors;
+  set.dset = dset;
+
+  return dset;
+}
+
+void lvk::VulkanContext::destroyDataGraphPipelineState(DataGraphPipelineState& state) {
+  if (state.session_) {
+    deferredTask(std::packaged_task<void()>(
+        [device = vkDevice_, session = state.session_]() { vkDestroyDataGraphPipelineSessionARM(device, session, nullptr); }));
+  }
+  for (VmaAllocation allocation : state.sessionAllocations_) {
+    deferredTask(std::packaged_task<void()>([vma = getVmaAllocator(), allocation]() { vmaFreeMemory((VmaAllocator)vma, allocation); }));
+  }
+  for (VkDeviceMemory memory : state.sessionMemory_) {
+    deferredTask(std::packaged_task<void()>([device = vkDevice_, memory]() { vkFreeMemory(device, memory, nullptr); }));
+  }
+  if (state.pipeline_) {
+    deferredTask(
+        std::packaged_task<void()>([device = vkDevice_, pipeline = state.pipeline_]() { vkDestroyPipeline(device, pipeline, nullptr); }));
+  }
+  if (state.pipelineLayout_) {
+    deferredTask(std::packaged_task<void()>(
+        [device = vkDevice_, layout = state.pipelineLayout_]() { vkDestroyPipelineLayout(device, layout, nullptr); }));
+  }
+  if (state.dpool_) {
+    deferredTask(
+        std::packaged_task<void()>([device = vkDevice_, pool = state.dpool_]() { vkDestroyDescriptorPool(device, pool, nullptr); }));
+  }
+  if (state.dsl_) {
+    deferredTask(
+        std::packaged_task<void()>([device = vkDevice_, dsl = state.dsl_]() { vkDestroyDescriptorSetLayout(device, dsl, nullptr); }));
+  }
+  state = DataGraphPipelineState{};
+}
+
+namespace {
+
+void getTensorFormatElement(VkFormat format, bool& outIsFloat, uint32_t& outBits) {
+  switch (format) {
+  case VK_FORMAT_R16_SFLOAT:
+  case VK_FORMAT_R32_SFLOAT:
+  case VK_FORMAT_R64_SFLOAT:
+    outIsFloat = true;
+    break;
+  default:
+    outIsFloat = false;
+    break;
+  }
+  outBits = lvk::getBytesPerPixel(format) * 8;
+}
+
+} // namespace
+
+lvk::Holder<lvk::DataGraphPipelineHandle> lvk::VulkanContext::createDataGraphPipeline(const DataGraphPipelineDesc& desc,
+                                                                                      Result* outResult) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_CREATE);
+
+  if (!LVK_VERIFY(has_ARM_data_graph_)) {
+    Result::setResult(outResult, Result::Code::RuntimeError, "VK_ARM_data_graph is not supported (see supportsDataGraphARM())");
+    return {};
+  }
+
+  const ShaderModuleState* sm = shaderModulesPool_.get(desc.smGraph);
+
+  if (!LVK_VERIFY(sm && sm->ci.pCode)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Invalid graph module");
+    return {};
+  }
+
+  if (!LVK_VERIFY(desc.inputs.size() + desc.outputs.size() <= LVK_MAX_DATA_GRAPH_TENSORS)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Too many tensors (see LVK_MAX_DATA_GRAPH_TENSORS)");
+    return {};
+  }
+
+  DataGraphPipelineState state = {
+      .entryPoint_ = desc.entryPoint ? desc.entryPoint : "main",
+      .debugName_ = desc.debugName ? desc.debugName : "",
+      .smGraph_ = desc.smGraph,
+  };
+  state.tensorDescs_.insert(state.tensorDescs_.end(), desc.inputs.begin(), desc.inputs.end());
+  state.tensorDescs_.insert(state.tensorDescs_.end(), desc.outputs.begin(), desc.outputs.end());
+  for (TensorDesc& d : state.tensorDescs_) {
+    if (!LVK_VERIFY(d.rank > 0 && d.rank <= LVK_TENSOR_MAX_RANK && d.format >= Format_R_UN8 && d.format <= Format_R_F32)) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Tensors need a positive rank and a single-channel format");
+      return {};
+    }
+    if (d.tiling == TensorTiling_Linear && !(getTensorFormatSupport(d.format, TensorTiling_Linear) & TensorUsageBits_DataGraph)) {
+      d.tiling = TensorTiling_Optimal;
+      std::fill(std::begin(d.strides), std::end(d.strides), 0);
+    }
+    bool hasCustomStrides = false;
+    for (uint32_t i = 0; i != d.rank; i++) {
+      if (!LVK_VERIFY(d.dimensions[i] > 0)) {
+        Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Tensor dimensions must be positive");
+        return {};
+      }
+      hasCustomStrides = hasCustomStrides || d.strides[i];
+    }
+    if (d.tiling == TensorTiling_Linear && !hasCustomStrides) {
+      d.strides[d.rank - 1] = (int64_t)getTensorDataSize(TensorDesc{.format = d.format, .rank = 1, .dimensions = {1}});
+      for (uint32_t i = d.rank - 1; i != 0; i--) {
+        d.strides[i - 1] = d.strides[i] * d.dimensions[i];
+      }
+    }
+  }
+
+  auto fail = [this, &state, outResult](const char* message) -> Holder<DataGraphPipelineHandle> {
+    destroyDataGraphPipelineState(state);
+    Result::setResult(outResult, Result::Code::RuntimeError, message);
+    return {};
+  };
+
+  SpvReflectShaderModule mdl;
+  if (spvReflectCreateShaderModule(sm->ci.codeSize, sm->ci.pCode, &mdl) != SPV_REFLECT_RESULT_SUCCESS) {
+    LLOGW("Data graph `%s`: SPIRV-Reflect cannot parse the module\n", state.debugName_.c_str());
+    return fail("Cannot reflect the graph module");
+  }
+  SCOPE_EXIT {
+    spvReflectDestroyShaderModule(&mdl);
+  };
+  const SpvReflectGraphEntryPoint* graph = state.entryPoint_.empty() ? (mdl.graph_entry_point_count ? &mdl.graph_entry_points[0] : nullptr)
+                                                                     : spvReflectGetGraphEntryPoint(&mdl, state.entryPoint_.c_str());
+  if (!graph) {
+    LLOGW("Data graph `%s`: graph entry point `%s` not found in the module\n", state.debugName_.c_str(), state.entryPoint_.c_str());
+    return fail("Cannot reflect the graph module");
+  }
+  if (!LVK_VERIFY(desc.inputs.size() == graph->input_count && desc.outputs.size() == graph->output_count)) {
+    LLOGW("Data graph `%s`: the module declares %u inputs and %u outputs, got %zu and %zu\n",
+          state.debugName_.c_str(),
+          graph->input_count,
+          graph->output_count,
+          desc.inputs.size(),
+          desc.outputs.size());
+    return fail("The number of tensors does not match the graph interface");
+  }
+  const uint32_t numResources = graph->input_count + graph->output_count;
+  for (uint32_t i = 0; i != numResources; i++) {
+    const SpvReflectDescriptorBinding& res = *graph->inputs[i];
+    const SpvReflectTypeDescription* type = res.type_description;
+    const TensorDesc& tensorDesc = state.tensorDescs_[i];
+    if (!LVK_VERIFY(tensorDesc.usage & TensorUsageBits_DataGraph)) {
+      return fail("Data graph tensors need TensorUsageBits_DataGraph");
+    }
+    if (!LVK_VERIFY(res.set == 0)) {
+      return fail("Graph modules using descriptor sets other than 0 are not supported");
+    }
+    if (!LVK_VERIFY(type && (type->type_flags & SPV_REFLECT_TYPE_FLAG_EXTERNAL_TENSOR_ARM))) {
+      return fail("Graph interface variable is not a tensor");
+    }
+    const SpvReflectTensorTraits& tensor = type->traits.tensor;
+    const bool resIsFloat = type->type_flags & SPV_REFLECT_TYPE_FLAG_FLOAT;
+    const uint32_t resElementBits = (type->type_flags & SPV_REFLECT_TYPE_FLAG_BOOL) ? 8u : type->traits.numeric.scalar.width;
+    const uint32_t resRank = tensor.rank == ~0u ? 0u : tensor.rank;
+    if (!LVK_VERIFY(resRank <= LVK_TENSOR_MAX_RANK)) {
+      return fail("Graph tensor rank is too large");
+    }
+    const bool resShaped = resRank && tensor.dims[0];
+    bool isFloat = false;
+    uint32_t elementBits = 0;
+    getTensorFormatElement(formatToVkFormat(tensorDesc.format), isFloat, elementBits);
+    const bool rankMatches = !resRank || resRank == tensorDesc.rank;
+    bool shapeMatches = !resShaped || resRank == tensorDesc.rank;
+    for (uint32_t d = 0; resShaped && shapeMatches && d < resRank; d++) {
+      shapeMatches = tensor.dims[d] == ~0u || (int64_t)tensor.dims[d] == tensorDesc.dimensions[d];
+    }
+    if (!LVK_VERIFY(isFloat == resIsFloat && elementBits == resElementBits && rankMatches && shapeMatches)) {
+      std::string shape;
+      for (uint32_t d = 0; resShaped && d < resRank; d++) {
+        shape += (shape.empty() ? "" : ", ") + (tensor.dims[d] == ~0u ? std::string("-1") : std::to_string(tensor.dims[d]));
+      }
+      LLOGW("Data graph `%s`: %s %u expects a %u-bit %s tensor of rank %u [%s]\n",
+            state.debugName_.c_str(),
+            i < graph->input_count ? "input" : "output",
+            i < graph->input_count ? i : i - graph->input_count,
+            resElementBits,
+            resIsFloat ? "float" : "integer",
+            resRank,
+            shape.c_str());
+      return fail("A tensor does not match the graph interface");
+    }
+  }
+
+  std::vector<VkDescriptorSetLayoutBinding> bindings;
+  bindings.reserve(numResources);
+  for (uint32_t i = 0; i != numResources; i++) {
+    const uint32_t binding = graph->inputs[i]->binding;
+    bindings.push_back(lvk::getDSLBinding(binding, VK_DESCRIPTOR_TYPE_TENSOR_ARM, 1, VK_SHADER_STAGE_ALL));
+    state.bindings_.push_back(binding);
+  }
+  {
+    const VkDescriptorSetLayoutCreateInfo dslci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .flags = 0,
+        .bindingCount = (uint32_t)bindings.size(),
+        .pBindings = bindings.data(),
+    };
+    if (vkCreateDescriptorSetLayout(vkDevice_, &dslci, nullptr, &state.dsl_) != VK_SUCCESS) {
+      return fail("vkCreateDescriptorSetLayout() failed for the data graph module");
+    }
+    const VkPipelineLayoutCreateInfo plci = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &state.dsl_,
+    };
+    if (vkCreatePipelineLayout(vkDevice_, &plci, nullptr, &state.pipelineLayout_) != VK_SUCCESS) {
+      return fail("vkCreatePipelineLayout() failed for the data graph module");
+    }
+  }
+
+  std::vector<VkTensorDescriptionARM> resourceDescriptions(state.tensorDescs_.size());
+  std::vector<VkDataGraphPipelineResourceInfoARM> resourceInfos(state.tensorDescs_.size());
+  for (size_t i = 0; i != state.tensorDescs_.size(); i++) {
+    const TensorDesc& tensorDesc = state.tensorDescs_[i];
+    resourceDescriptions[i] = {
+        .sType = VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+        .tiling = tensorDesc.tiling == TensorTiling_Linear ? VK_TENSOR_TILING_LINEAR_ARM : VK_TENSOR_TILING_OPTIMAL_ARM,
+        .format = formatToVkFormat(tensorDesc.format),
+        .dimensionCount = tensorDesc.rank,
+        .pDimensions = tensorDesc.dimensions,
+        .pStrides = tensorDesc.tiling == TensorTiling_Linear ? tensorDesc.strides : nullptr,
+        .usage = tensorUsageToVkTensorUsage(tensorDesc.usage),
+    };
+    resourceInfos[i] = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_RESOURCE_INFO_ARM,
+        .pNext = &resourceDescriptions[i],
+        .descriptorSet = graph->inputs[i]->set,
+        .binding = graph->inputs[i]->binding,
+        .arrayElement = 0,
+    };
+  }
+  std::vector<VkTensorDescriptionARM> constantDescriptions(desc.constants.size());
+  std::vector<VkDataGraphPipelineConstantARM> constants(desc.constants.size());
+  for (size_t i = 0; i != desc.constants.size(); i++) {
+    const DataGraphConstant& c = desc.constants[i];
+    const VkFormat vkFormat = lvk::formatToVkFormat(c.format);
+    if (!LVK_VERIFY(c.data && c.rank > 0 && c.rank <= LVK_TENSOR_MAX_RANK && vkFormat != VK_FORMAT_UNDEFINED)) {
+      return fail("Invalid data graph constant");
+    }
+    constantDescriptions[i] = {
+        .sType = VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+        .tiling = VK_TENSOR_TILING_LINEAR_ARM,
+        .format = vkFormat,
+        .dimensionCount = c.rank,
+        .pDimensions = c.dimensions,
+        .pStrides = nullptr,
+        .usage = VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM,
+    };
+    constants[i] = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_CONSTANT_ARM,
+        .pNext = &constantDescriptions[i],
+        .id = c.id,
+        .pConstantData = c.data,
+    };
+  }
+  {
+    const VkDataGraphPipelineShaderModuleCreateInfoARM smci = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SHADER_MODULE_CREATE_INFO_ARM,
+        .pNext = &sm->ci,
+        .module = VK_NULL_HANDLE,
+        .pName = state.entryPoint_.c_str(),
+        .pSpecializationInfo = nullptr,
+        .constantCount = (uint32_t)constants.size(),
+        .pConstants = constants.data(),
+    };
+    const VkDataGraphPipelineCreateInfoARM ci = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_CREATE_INFO_ARM,
+        .pNext = &smci,
+        .flags = 0,
+        .layout = state.pipelineLayout_,
+        .resourceInfoCount = (uint32_t)resourceInfos.size(),
+        .pResourceInfos = resourceInfos.data(),
+    };
+    const VkResult pipelineResult =
+        vkCreateDataGraphPipelinesARM(vkDevice_, VK_NULL_HANDLE, pipelineCache_, 1, &ci, nullptr, &state.pipeline_);
+    if (!LVK_VERIFY(pipelineResult == VK_SUCCESS)) {
+      return fail("vkCreateDataGraphPipelinesARM() failed");
+    }
+    if (!hasMLEmulationLayer_) {
+      VK_ASSERT(lvk::setDebugObjectName(vkDevice_, VK_OBJECT_TYPE_PIPELINE, (uint64_t)state.pipeline_, state.debugName_.c_str()));
+    }
+  }
+
+  {
+    const VkDataGraphPipelineSessionCreateInfoARM sci = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_CREATE_INFO_ARM,
+        .flags = 0,
+        .dataGraphPipeline = state.pipeline_,
+    };
+    const VkResult sessionResult = vkCreateDataGraphPipelineSessionARM(vkDevice_, &sci, nullptr, &state.session_);
+    if (!LVK_VERIFY(sessionResult == VK_SUCCESS)) {
+      return fail("vkCreateDataGraphPipelineSessionARM() failed");
+    }
+    const VkDataGraphPipelineSessionBindPointRequirementsInfoARM bpri = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_REQUIREMENTS_INFO_ARM,
+        .session = state.session_,
+    };
+    uint32_t numRequirements = 0;
+    VK_ASSERT(vkGetDataGraphPipelineSessionBindPointRequirementsARM(vkDevice_, &bpri, &numRequirements, nullptr));
+    std::vector<VkDataGraphPipelineSessionBindPointRequirementARM> requirements(
+        numRequirements, {.sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_REQUIREMENT_ARM});
+    VK_ASSERT(vkGetDataGraphPipelineSessionBindPointRequirementsARM(vkDevice_, &bpri, &numRequirements, requirements.data()));
+
+    for (const VkDataGraphPipelineSessionBindPointRequirementARM& req : requirements) {
+      if (req.bindPointType != VK_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_TYPE_MEMORY_ARM) {
+        continue;
+      }
+      for (uint32_t objectIndex = 0; objectIndex != req.numObjects; objectIndex++) {
+        const VkDataGraphPipelineSessionMemoryRequirementsInfoARM mri = {
+            .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_MEMORY_REQUIREMENTS_INFO_ARM,
+            .session = state.session_,
+            .bindPoint = req.bindPoint,
+            .objectIndex = objectIndex,
+        };
+        VkMemoryRequirements2 memRequirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+        vkGetDataGraphPipelineSessionMemoryRequirementsARM(vkDevice_, &mri, &memRequirements);
+        if (!memRequirements.memoryRequirements.size) {
+          continue;
+        }
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize memoryOffset = 0;
+        if (LVK_VULKAN_USE_VMA) {
+          const VmaAllocationCreateInfo vmaAllocInfo = {
+              .usage = VMA_MEMORY_USAGE_UNKNOWN,
+              .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+          };
+          VmaAllocation allocation = VK_NULL_HANDLE;
+          VmaAllocationInfo allocInfo = {};
+          const VkResult allocResult = vmaAllocateMemory(
+              (VmaAllocator)getVmaAllocator(), &memRequirements.memoryRequirements, &vmaAllocInfo, &allocation, &allocInfo);
+          if (!LVK_VERIFY(allocResult == VK_SUCCESS)) {
+            return fail("Cannot allocate data graph session memory");
+          }
+          state.sessionAllocations_.push_back(allocation);
+          memory = allocInfo.deviceMemory;
+          memoryOffset = allocInfo.offset;
+        } else {
+          const VkResult allocResult =
+              lvk::allocateMemory2(vkPhysicalDevice_, vkDevice_, &memRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memory);
+          if (!LVK_VERIFY(allocResult == VK_SUCCESS)) {
+            return fail("Cannot allocate data graph session memory");
+          }
+          state.sessionMemory_.push_back(memory);
+        }
+        const VkBindDataGraphPipelineSessionMemoryInfoARM bindInfo = {
+            .sType = VK_STRUCTURE_TYPE_BIND_DATA_GRAPH_PIPELINE_SESSION_MEMORY_INFO_ARM,
+            .session = state.session_,
+            .bindPoint = req.bindPoint,
+            .objectIndex = objectIndex,
+            .memory = memory,
+            .memoryOffset = memoryOffset,
+        };
+        if (vkBindDataGraphPipelineSessionMemoryARM(vkDevice_, 1, &bindInfo) != VK_SUCCESS) {
+          return fail("Cannot bind data graph session memory");
+        }
+      }
+    }
+  }
+
+  {
+    const VkDescriptorPoolSize poolSize = {VK_DESCRIPTOR_TYPE_TENSOR_ARM,
+                                           LVK_MAX_DATA_GRAPH_TENSOR_SETS * std::max(1u, (uint32_t)state.tensorDescs_.size())};
+    const VkDescriptorPoolCreateInfo dpci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = 0,
+        .maxSets = LVK_MAX_DATA_GRAPH_TENSOR_SETS,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize,
+    };
+    if (vkCreateDescriptorPool(vkDevice_, &dpci, nullptr, &state.dpool_) != VK_SUCCESS) {
+      return fail("Cannot create the data graph descriptor pool");
+    }
+  }
+
+  Result::setResult(outResult, Result());
+
+  return {this, dataGraphPipelinesPool_.create(std::move(state))};
+}
+
+void lvk::VulkanContext::destroy(lvk::DataGraphPipelineHandle handle) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_DESTROY);
+
+  DataGraphPipelineState* state = dataGraphPipelinesPool_.get(handle);
+
+  if (!state) {
+    return;
+  }
+
+  destroyDataGraphPipelineState(*state);
+
+  dataGraphPipelinesPool_.destroy(handle);
 }
 
 void lvk::CommandBuffer::tensorBarriers(const ldr::Span<TensorHandle>& tensors,
@@ -10933,6 +11425,11 @@ void lvk::CommandBuffer::tensorBarriers(const ldr::Span<TensorHandle>& tensors,
   const bool computeOnlyQueue = isComputeOnlyQueue();
   srcStage = stripGraphicsStages(srcStage, computeOnlyQueue);
   dstStage = stripGraphicsStages(dstStage, computeOnlyQueue);
+
+  if (!ctx_->has_ARM_data_graph_ || computeOnlyQueue) {
+    srcStage &= ~VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+    dstStage &= ~VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+  }
 
   std::vector<VkTensorMemoryBarrierARM> barriers;
   barriers.reserve(tensors.size());
@@ -11039,4 +11536,88 @@ void lvk::CommandBuffer::cmdCopyTensor(TensorHandle src, TensorHandle dst) {
   vkCmdCopyTensorARM(wrapper_->cmdBuf_, &copyInfo);
 
   tensorBarriers({src, dst}, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+}
+
+void lvk::CommandBuffer::cmdDispatchDataGraph(DataGraphPipelineHandle handle,
+                                              const ldr::Span<const TensorHandle>& inputs,
+                                              const ldr::Span<const TensorHandle>& outputs,
+                                              const Dependencies& deps) {
+  LVK_PROFILER_FUNCTION();
+  LVK_PROFILER_GPU_ZONE("cmdDispatchDataGraph()", ctx_, wrapper_->cmdBuf_, LVK_PROFILER_COLOR_CMD_DISPATCH);
+
+  LVK_ASSERT(!isRendering_);
+
+  DataGraphPipelineState* state = ctx_->dataGraphPipelinesPool_.get(handle);
+
+  if (!LVK_VERIFY(state && state->pipeline_ && state->session_)) {
+    return;
+  }
+  LVK_ASSERT_MSG(!isComputeOnlyQueue(), "Data graphs are dispatched on the graphics queue");
+
+  TensorHandle tensors[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+  const size_t numTensors = inputs.size() + outputs.size();
+  if (!LVK_VERIFY(numTensors == state->tensorDescs_.size() && numTensors <= LVK_MAX_DATA_GRAPH_TENSORS)) {
+    return;
+  }
+  std::copy(inputs.begin(), inputs.end(), tensors);
+  std::copy(outputs.begin(), outputs.end(), tensors + inputs.size());
+
+  TensorHandle graphTensors[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+  for (size_t i = 0; i != numTensors; i++) {
+    const VulkanTensor* tensor = ctx_->tensorsPool_.get(tensors[i]);
+    graphTensors[i] = tensor && tensor->optimalTensor_.valid() ? tensor->optimalTensor_ : tensors[i];
+  }
+
+  for (size_t i = 0; i != numTensors; i++) {
+    const VulkanTensor* tensor = ctx_->tensorsPool_.get(graphTensors[i]);
+    if (!LVK_VERIFY(tensor && tensor->vkTensorView_)) {
+      return;
+    }
+    const TensorDesc& d = state->tensorDescs_[i];
+    bool matches = tensor->vkFormat_ == formatToVkFormat(d.format) && tensor->rank_ == d.rank &&
+                   tensor->isLinear() == (d.tiling == TensorTiling_Linear) && (tensor->vkUsageFlags_ & VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM);
+    for (uint32_t k = 0; matches && k != d.rank; k++) {
+      matches = tensor->dimensions_[k] == d.dimensions[k] && (!tensor->isLinear() || tensor->strides_[k] == d.strides[k]);
+    }
+    if (!LVK_VERIFY(matches)) {
+      LLOGW("Data graph `%s`: tensor %zu does not match the description the pipeline was created with\n", state->debugName_.c_str(), i);
+      return;
+    }
+  }
+
+  const VkDescriptorSet dset = ctx_->getTensorDescriptorSet(*state, {graphTensors, numTensors});
+  if (!LVK_VERIFY(dset)) {
+    return;
+  }
+
+  addCrossQueueDependencies(deps);
+
+  const VkPipelineStageFlags2 srcStages = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                          VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+  for (size_t i = 0; i != inputs.size(); i++) {
+    if (graphTensors[i] != tensors[i]) {
+      cmdCopyTensor(tensors[i], graphTensors[i]);
+    }
+  }
+  tensorBarriers({graphTensors, numTensors}, srcStages, VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM);
+  std::vector<TensorHandle> depTensors;
+  for (const TensorHandle tensor : deps.tensors) {
+    if (std::find(tensors, tensors + numTensors, tensor) == tensors + numTensors) {
+      depTensors.push_back(tensor);
+    }
+  }
+  tensorBarriers({depTensors.data(), depTensors.size()}, srcStages, VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM);
+
+  vkCmdBindPipeline(wrapper_->cmdBuf_, VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM, state->pipeline_);
+  vkCmdBindDescriptorSets(wrapper_->cmdBuf_, VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM, state->pipelineLayout_, 0, 1, &dset, 0, nullptr);
+  vkCmdDispatchDataGraphARM(wrapper_->cmdBuf_, state->session_, nullptr);
+
+  for (size_t i = inputs.size(); i != numTensors; i++) {
+    if (graphTensors[i] != tensors[i]) {
+      cmdCopyTensor(graphTensors[i], tensors[i]);
+    }
+  }
+
+  lastPipelineBound_ = VK_NULL_HANDLE;
 }

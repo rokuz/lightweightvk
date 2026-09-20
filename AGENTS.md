@@ -23,6 +23,8 @@ python3 deploy_content.py
 
 Both scripts invoke `third-party/bootstrap.py` which reads the corresponding JSON manifest and fetches git repos, archives, or individual files.
 
+- `tools/make_nss_model.py`: shape-specializes the Arm NSS network for another render resolution (`--render 1920x1080` writes the model `DEMO_003_NeuralSuperSampling --4k` needs). `deploy_content.py` runs it for 1920x1080 when that model is missing, so the 4K scenario needs no separate step; it warns and carries on if the Vulkan SDK or a C++ compiler is not there yet. It runs TOSA shape inference over the shape-agnostic model Arm publishes and rebuilds the VGF with `tools/vgf_respecialize.cpp`, which it builds on demand (that target is excluded from the default build). Its docstring has the details; do not restate them here.
+
 ### Platform-Specific Build Commands
 
 **Windows:**
@@ -108,7 +110,8 @@ To check CI status: `gh run list` or `gh run view <run-id>`.
 - `LVK_SPIRV_REFLECT_EXTERNAL`: Use external SPIRV-Reflect library (default: OFF)
 - `LVK_ENABLE_LONG_PATHS_WIN32`: Enable long paths on Windows (default: ON)
 - `LVK_ANDROID_ABI`: Enabled ABI on Android (cache string, default: `arm64-v8a`)
-- `LVK_WITH_ML_EMULATION_LAYER`: Download and build the Arm ML Emulation Layer for Vulkan (`VK_LAYER_ML_Graph_Emulation`, `VK_LAYER_ML_Tensor_Emulation`) as an ExternalProject to emulate `VK_ARM_tensors`/`VK_ARM_data_graph` on GPUs without native support (default: OFF). It shares glslang, SPIRV-Headers, SPIRV-Tools and Vulkan-Headers with LVK; the layer manifests are installed into `build/ml-emulation-layer/bin` (Windows) or `build/ml-emulation-layer/share/vulkan/explicit_layer.d`. With `LVK_WITH_SAMPLES_ANDROID` the layer is also cross-built for every `LVK_ANDROID_ABI` (needs `ninja` and the NDK's `llvm-strip`) into `build/ml-emulation-layer-android/jniLibs`, which the generated projects list in `jniLibs.srcDirs`. Samples request the layers via `ContextConfig::layers`; they are always used, even on GPUs supporting `VK_ARM_tensors` natively; `VulkanApp` adds the built layer to `VK_ADD_LAYER_PATH`, and `VulkanContext` skips requested layers that are not installed
+- `LVK_WITH_TENSORS`: Enable the machine learning helpers: the Arm VGF library and `lvk/HelpersVgf.h` (`lvk::VgfModel`, loads `.vgf` models into data graph pipelines) (default: ON). Shaders never access tensors directly (no `tensorARM`): `createTensorBufferAliasing()` puts a linear tensor on a buffer (shaders use its device address, `buffer_reference`), `createTensorTextureAliasing()` puts an optimal tensor on a `TextureUsageBits_TensorAliasing` texture (shaders sample or store it). Where linear tensors cannot feed a data graph, a buffer-aliasing tensor gets an internal optimally tiled tensor that data graph pipelines are created for, and `cmdDispatchDataGraph()` copies inputs into it before the dispatch and outputs out of it after
+- `LVK_WITH_ML_EMULATION_LAYER`: Download and build the Arm ML Emulation Layer for Vulkan (`VK_LAYER_ML_Graph_Emulation`, `VK_LAYER_ML_Tensor_Emulation`) as an ExternalProject to emulate `VK_ARM_tensors`/`VK_ARM_data_graph` on GPUs without native support (default: OFF). It shares glslang, SPIRV-Headers, SPIRV-Tools and Vulkan-Headers with LVK; the layer manifests are installed into `build/ml-emulation-layer/bin` (Windows) or `build/ml-emulation-layer/share/vulkan/explicit_layer.d`. With `LVK_WITH_SAMPLES_ANDROID` the layer is also cross-built for every `LVK_ANDROID_ABI` (needs `ninja` and the NDK's `llvm-strip`) into `build/ml-emulation-layer-android/jniLibs`, which the generated projects list in `jniLibs.srcDirs`. Samples request the layers via `ContextConfig::layers`; they are always used, even on GPUs supporting `VK_ARM_tensors` natively; `VulkanApp` adds the built layer to `VK_ADD_LAYER_PATH`, and `VulkanContext` skips requested layers that are not installed; `--no-ml-emulation` drops them
 
 ## Coding Style
 
@@ -158,6 +161,7 @@ To check CI status: `gh run list` or `gh run view <run-id>`.
   - `LVK.h/cpp`: Core API definitions and implementations
   - `vulkan/`: Vulkan-specific backend implementation
   - `HelpersImGui.h/cpp`: ImGui integration helpers
+  - `HelpersVgf.h/cpp`: VGF model loading for `VK_ARM_data_graph` (`lvk::VgfModel`), compiled only with `LVK_WITH_TENSORS`
 
 ### Key Design Principles
 1. **Bindless-only**: Utilizes Vulkan 1.3+ dynamic rendering, descriptor indexing, and buffer device address
@@ -166,12 +170,13 @@ To check CI status: `gh run list` or `gh run view <run-id>`.
 4. **Cross-platform**: Windows, Linux, macOS (via KosmicKrisp), Android
 
 ### Sample Applications
-Located in `samples/`, 17 demos covering:
+Located in `samples/`, 18 demos covering:
 - Basics: `001_HelloTriangle`, `002_RenderToCubeMap`, `003_RenderToCubeMapSinglePass`, `004_YUV`
 - Advanced rendering: `005_MeshShaders`, `006_SwapchainHDR`, `007_DynamicRenderingLocalRead`, `008_MeshShaderFireworks`, `009_TriplanarMapping`, `010_OmniShadows`, `011_VariableRateShading`
 - Ray tracing: `RTX_001_Hello`, `RTX_002_AO`, `RTX_003_Pipeline`, `RTX_004_Textures`
 - Complex demos: `DEMO_001_SolarSystem`, `Tiny_MeshLarge`
 - Multiview rendering examples: `010_OmniShadows`, `DEMO_001_SolarSystem`
+- Neural graphics (`VK_ARM_tensors` + `VK_ARM_data_graph`; shaders write and read tensors through `buffer_reference` to the buffers they alias and through the textures they alias): `DEMO_003_NeuralSuperSampling` runs Arm Neural Super Sampling (960x540 -> 1920x1080, `--4k` for 1920x1080 -> 3840x2160) on the Bistro scene (mesh and textures through `samples/Bistro.h`); its compute entry points are compiled into the sample and the algorithm comes from the `neural-graphics-sdk` dependency (a fork of the Arm Neural Graphics SDK that binds NSS resources bindlessly, pulled in at run time by a small `#include` resolver); the graph writes its temporal feedback straight into a texture through `createTensorTextureAliasing()` where int8 tensors can alias textures, and otherwise into a buffer-aliasing tensor that a compute pass copies into the texture (the Arm ML Emulation Layer does not support aliasing optimal tensors); the network comes from the `nss` entry of `bootstrap-content.json`
 
 ### Android Project Generation
 Android sample projects are generated by CMake (`ADD_DEMO()` macro in `samples/CMakeLists.txt`) into `build/android/<app>/`. The system uses two layers:
