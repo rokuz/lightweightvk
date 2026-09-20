@@ -288,6 +288,42 @@ void lvk::destroy(lvk::IContext* ctx, lvk::AccelStructHandle handle) {
   }
 }
 
+void lvk::destroy(lvk::IContext* ctx, lvk::TensorHandle handle) {
+  if (ctx) {
+    ctx->destroy(handle);
+  }
+}
+
+void lvk::destroy(lvk::IContext* ctx, lvk::DataGraphPipelineHandle handle) {
+  if (ctx) {
+    ctx->destroy(handle);
+  }
+}
+
+uint64_t lvk::getTensorNumElements(const TensorDesc& desc) {
+  if (!desc.rank || desc.rank > LVK_TENSOR_MAX_RANK) {
+    return 0;
+  }
+  uint64_t numElements = 1;
+  for (uint32_t i = 0; i != desc.rank; i++) {
+    if (desc.dimensions[i] <= 0 || (uint64_t)desc.dimensions[i] > UINT64_MAX / numElements) {
+      return 0;
+    }
+    numElements *= (uint64_t)desc.dimensions[i];
+  }
+  return numElements;
+}
+
+uint64_t lvk::getTensorDataSize(const TensorDesc& desc) {
+  if (desc.format < Format_R_UN8 || desc.format > Format_R_F32) {
+    return 0;
+  }
+  const uint64_t elementSize = properties[desc.format].bytesPerBlock;
+  const uint64_t numElements = getTensorNumElements(desc);
+
+  return numElements > UINT64_MAX / elementSize ? 0 : numElements * elementSize;
+}
+
 // Logs GLSL shaders with line numbers annotation
 void lvk::logShaderSource(const char* text) {
   uint32_t line = 0;

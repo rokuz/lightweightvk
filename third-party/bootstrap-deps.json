@@ -37,6 +37,10 @@
         "type": "git",
         "url": "https://github.com/KhronosGroup/SPIRV-Reflect.git",
         "revision": "vulkan-sdk-1.4.363.0"
+    },
+    "postprocess": {
+        "type": "script",
+        "file": "spirv_reflect_tensors.py"
     }
 },
 {
@@ -281,6 +285,96 @@
         "type": "git",
         "url": "https://github.com/corporateshark/lightweightvk_screenshot_tests",
         "revision": "e7cb74ad35153ca978a13827dee892980ce8f799",
+        "recursive": false
+    }
+},
+{
+    "name": "neural-graphics-sdk",
+    "predicate": "os.environ.get('LVK_WITH_TENSORS') != 'OFF'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/rokuz/neural-graphics-sdk-for-game-engines.git",
+        "revision": "c170de237fe4649b319ebe850fb1e46a4d29bed8",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/vgf-library",
+    "predicate": "os.environ.get('LVK_WITH_TENSORS') != 'OFF'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/arm/ai-ml-sdk-vgf-library.git",
+        "revision": "v0.10.0",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/flatbuffers",
+    "predicate": "os.environ.get('LVK_WITH_TENSORS') != 'OFF'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/google/flatbuffers.git",
+        "revision": "v25.2.10",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/emulation-layer",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/rokuz/ai-ml-emulation-layer-for-vulkan.git",
+        "revision": "e45cb74259f07aff76004d95f15a8790b6a1c345",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/glslang",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/KhronosGroup/glslang.git",
+        "revision": "vulkan-sdk-1.4.357.0",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/SPIRV-Headers",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/KhronosGroup/SPIRV-Headers.git",
+        "revision": "vulkan-sdk-1.4.357.0",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/SPIRV-Tools",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/KhronosGroup/SPIRV-Tools.git",
+        "revision": "vulkan-sdk-1.4.357.0",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/SPIRV-Cross",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/KhronosGroup/SPIRV-Cross.git",
+        "revision": "vulkan-sdk-1.4.357.0",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/json",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/nlohmann/json.git",
+        "revision": "v3.12.0",
         "recursive": false
     }
 }

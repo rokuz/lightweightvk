@@ -60,8 +60,8 @@ On MacOS, `KosmicKrisp` and `VulkanSDK 1.4.357+` are required.
 Before building, run the deployment scripts:
 
 ```
-python3 deploy_content.py
 python3 deploy_deps.py
+python3 deploy_content.py
 ```
 
 These scripts download external third-party dependencies. Please check [LICENSE.md](./LICENSE.md) for the full list.
@@ -129,6 +129,36 @@ To enable [Slang](https://github.com/shader-slang/slang), configure the project 
 ```
 cmake .. -DLVK_WITH_SLANG=ON
 ```
+
+## Arm tensors and data graphs (neural graphics)
+
+LightweightVK exposes [VK_ARM_tensors](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_ARM_tensors.html)
+and [VK_ARM_data_graph](https://registry.khronos.org/vulkan/specs/latest/man/html/VK_ARM_data_graph.html) in the same bindless
+manner as textures: tensors are accessed from shaders through the `kTensors<Type>_<Rank>[]` arrays (descriptor set 0, binding 5)
+using `tensorReadARM()`/`tensorWriteARM()`, and neural networks are run as data graph pipelines created from SPIR-V graph modules,
+for example loaded from [VGF](https://github.com/arm/ai-ml-sdk-vgf-library) files.
+
+```c
+lvk::Holder<lvk::TensorHandle> tensor = ctx_->createTensor({.format = lvk::Format_R_I8, .rank = 4, .dimensions = {1, 544, 960, 12}, .usage = lvk::TensorUsageBits_Shader | lvk::TensorUsageBits_DataGraph});
+...
+buffer.cmdDispatch({w, h, 1}, {.tensors = {tensor}}); // GLSL: tensorWriteARM(kTensorsI8_4[pc.tensor], coords, value)
+buffer.cmdDispatchDataGraph(graphPipeline, {tensor}, {output}); // the tensors the pipeline was created against
+```
+
+The sample `DEMO_003_NeuralSuperSampling` runs [Arm Neural Super Sampling](https://huggingface.co/Arm/neural-super-sampling)
+on the Bistro scene, 960x540 -> 1920x1080 by default and 1920x1080 -> 3840x2160 with `--4k`. GPUs without native support
+can use the [Arm ML Emulation Layer for Vulkan](https://github.com/arm/ai-ml-emulation-layer-for-vulkan); LightweightVK
+builds a [fork](https://github.com/rokuz/ai-ml-emulation-layer-for-vulkan) of it carrying runtime performance work, which
+is downloaded and built from source (no global installation) with the following CMake option:
+
+```
+cmake .. -DLVK_WITH_ML_EMULATION_LAYER=ON
+```
+
+`DEMO_003_NeuralSuperSampling` enables the layer whenever the GPU lacks `VK_ARM_tensors`; run it with `--no-ml-emulation` to
+disable it.
+`lvk/HelpersVgf.h` loads VGF models (`lvk::VgfModel`) and creates their data graph pipelines; it is built when `LVK_WITH_TENSORS` is
+enabled (the default).
 
 ## Screenshots
 

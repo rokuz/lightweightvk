@@ -7,6 +7,7 @@
  * LICENSE file in the root directory of this source tree.
  */
 
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -19,6 +20,8 @@
 #include <glslang/Include/glslang_c_interface.h>
 #include <ldrutils/lutils/ScopeExit.h>
 #include <spirv_reflect.h>
+
+#include "SpirvGraphReflection.h"
 
 #if defined(VK_USE_PLATFORM_METAL_EXT)
 #include <vulkan/vulkan_metal.h>
@@ -82,7 +85,8 @@ enum Bindings {
   kBinding_StorageImages = 2,
   kBinding_YUVImages = 3,
   kBinding_AccelerationStructures = 4,
-  kBinding_NumBindings = 5,
+  kBinding_Tensors = 5,
+  kBinding_NumBindings = 6,
 };
 
 const uint32_t kDescriptorSet_InputAttachments = 1; // for VkDescriptorSetLayout in getVkPipeline()
@@ -302,6 +306,8 @@ VkShaderStageFlagBits shaderStageToVkShaderStage(lvk::ShaderStage stage) {
     return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
   case lvk::Stage_Callable:
     return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+  case lvk::Stage_DataGraph:
+    return VK_SHADER_STAGE_ALL;
   };
   LVK_ASSERT(false);
   return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
@@ -2636,6 +2642,10 @@ void lvk::CommandBuffer::cmdDispatch(const Dimensions& groupCount, const Depende
                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
   }
+  tensorBarriers(deps.tensors,
+                 VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
 
   vkCmdDispatch(wrapper_->cmdBuf_, groupCount.width, groupCount.height, groupCount.depth);
 }
@@ -2659,6 +2669,10 @@ void lvk::CommandBuffer::cmdDispatchIndirect(BufferHandle indirectBuffer, size_t
                       VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT,
                   VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
   }
+  tensorBarriers(deps.tensors,
+                 VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT |
+                     VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT);
 
   const lvk::VulkanBuffer* indBuf = ctx_->buffersPool_.get(indirectBuffer);
 
@@ -2805,6 +2819,9 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
     }
     bufferBarrier(deps.buffers[i], VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT, dstStageFlags);
   }
+  tensorBarriers(deps.tensors,
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
+                 VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT);
 
   const uint32_t numFbColorAttachments = fb.getNumColorAttachments();
 
@@ -3541,6 +3558,9 @@ void lvk::CommandBuffer::cmdTraceRays(uint32_t width, uint32_t height, uint32_t 
                   VK_PIPELINE_STAGE_2_VERTEX_INPUT_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT,
                   VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
   }
+  tensorBarriers(deps.tensors,
+                 VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM,
+                 VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR);
 
   vkCmdTraceRaysKHR(
       wrapper_->cmdBuf_, &rtps->sbtEntryRayGen, &rtps->sbtEntryMiss, &rtps->sbtEntryHit, &rtps->sbtEntryCallable, width, height, depth);
@@ -4696,6 +4716,7 @@ lvk::VulkanContext::~VulkanContext() {
   vkDestroySemaphore(vkDevice_, timelineSemaphore_, nullptr);
 
   destroy(dummyTexture_);
+  destroy(dummyTensor_);
 
   if (dummyTLAS_) {
     vkDestroyAccelerationStructureKHR(vkDevice_, dummyTLAS_, nullptr);
@@ -4730,6 +4751,12 @@ lvk::VulkanContext::~VulkanContext() {
   if (buffersPool_.numObjects()) {
     LLOGW("Leaked %u buffers\n", buffersPool_.numObjects());
   }
+  if (tensorsPool_.numObjects()) {
+    LLOGW("Leaked %u tensors\n", tensorsPool_.numObjects());
+  }
+  if (dataGraphPipelinesPool_.numObjects()) {
+    LLOGW("Leaked %u data graph pipelines\n", dataGraphPipelinesPool_.numObjects());
+  }
 
   // manually destroy the dummy sampler
   vkDestroySampler(vkDevice_, samplersPool_.objects_.front(), nullptr);
@@ -4738,6 +4765,8 @@ lvk::VulkanContext::~VulkanContext() {
   renderPipelinesPool_.clear();
   shaderModulesPool_.clear();
   texturesPool_.clear();
+  tensorsPool_.clear();
+  dataGraphPipelinesPool_.clear();
 
   immediateCompute_.reset(nullptr);
   immediate_.reset(nullptr);
@@ -5085,9 +5114,24 @@ lvk::Holder<lvk::SamplerHandle> lvk::VulkanContext::createSampler(const SamplerS
 lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureDesc& requestedDesc,
                                                                   const char* debugName,
                                                                   Result* outResult) {
+  return createTextureImpl(requestedDesc, debugName, outResult, {});
+}
+
+lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTextureImpl(const TextureDesc& requestedDesc,
+                                                                      const char* debugName,
+                                                                      Result* outResult,
+                                                                      TensorHandle aliasTensorHandle) {
   LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_CREATE);
 
   TextureDesc desc(requestedDesc);
+
+  VulkanTensor* aliasTensor = aliasTensorHandle ? tensorsPool_.get(aliasTensorHandle) : nullptr;
+  if (aliasTensorHandle && !LVK_VERIFY(aliasTensor && aliasTensor->vkTensor_)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Invalid tensor to alias");
+    return {};
+  }
+  const bool isAliasLinear = aliasTensor && aliasTensor->isLinear();
+  const VkImageTiling vkTiling = isAliasLinear ? VK_IMAGE_TILING_LINEAR : VK_IMAGE_TILING_OPTIMAL;
 
   if (debugName && *debugName) {
     desc.debugName = debugName;
@@ -5186,6 +5230,9 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
     // For now, always set this flag so we can read it back
     usageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
   }
+  if (aliasTensor && !isAliasLinear) {
+    usageFlags |= VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM;
+  }
 
   LVK_ASSERT_MSG(usageFlags != 0, "Invalid usage flags");
 
@@ -5241,14 +5288,18 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
     vkGetPhysicalDeviceFormatProperties2(vkPhysicalDevice_, vkFormat, &formatProperties_[desc.format]);
   }
 
+  const VkFormatFeatureFlags tilingFeatures = vkTiling == VK_IMAGE_TILING_LINEAR
+                                                  ? formatProperties_[desc.format].formatProperties.linearTilingFeatures
+                                                  : formatProperties_[desc.format].formatProperties.optimalTilingFeatures;
+
   if (usageFlags & VK_IMAGE_USAGE_SAMPLED_BIT) {
-    if (!LVK_VERIFY(formatProperties_[desc.format].formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+    if (!LVK_VERIFY(tilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
       Result::setResult(outResult, Result::Code::RuntimeError, "Format does not support sampled images on this device");
       return {};
     }
   }
   if (usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) {
-    if (!LVK_VERIFY(formatProperties_[desc.format].formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
+    if (!LVK_VERIFY(tilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
       Result::setResult(outResult, Result::Code::RuntimeError, "Format does not support storage images on this device");
       return {};
     }
@@ -5262,7 +5313,7 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
   LVK_ASSERT(vkExtent.depth > 0);
 
   // add VK_IMAGE_USAGE_HOST_TRANSFER_BIT to eligible single-plane images to enable the staging-free imageData2D() path
-  if (desc.storage != lvk::StorageType_Memoryless && lvk::getNumImagePlanes(desc.format) == 1) {
+  if (desc.storage != lvk::StorageType_Memoryless && lvk::getNumImagePlanes(desc.format) == 1 && !aliasTensor) {
     const VkImageCreateInfo hostCopyProbe = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .flags = vkCreateFlags,
@@ -5333,7 +5384,7 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
       .mipLevels = numLevels,
       .arrayLayers = numLayers,
       .samples = vkSamples,
-      .tiling = VK_IMAGE_TILING_OPTIMAL,
+      .tiling = vkTiling,
       .usage = usageFlags,
       .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
       .queueFamilyIndexCount = 0,
@@ -5341,7 +5392,27 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
       .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
   };
 
-  if (LVK_VULKAN_USE_VMA && numPlanes == 1) {
+  if (aliasTensor) {
+    VK_ASSERT(vkCreateImage(vkDevice_, &ci, nullptr, &image.vkImage_));
+    const VkImageMemoryRequirementsInfo2 ri = {.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_REQUIREMENTS_INFO_2, .image = image.vkImage_};
+    VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+    vkGetImageMemoryRequirements2(vkDevice_, &ri, &requirements);
+    const VkMemoryRequirements& req = requirements.memoryRequirements;
+    const bool isCompatible = (req.memoryTypeBits & (1u << aliasTensor->vkMemoryTypeIndex_)) && req.size <= aliasTensor->vkMemorySize_ &&
+                              (aliasTensor->vkMemoryOffset_ % req.alignment == 0);
+    if (!LVK_VERIFY(isCompatible)) {
+      vkDestroyImage(vkDevice_, image.vkImage_, nullptr);
+      Result::setResult(outResult, Result::Code::RuntimeError, "The image cannot alias the tensor memory (size, alignment or memory type)");
+      return {};
+    }
+    const VkBindImageMemoryInfo bindInfo = {
+        .sType = VK_STRUCTURE_TYPE_BIND_IMAGE_MEMORY_INFO,
+        .image = image.vkImage_,
+        .memory = aliasTensor->vkMemory_,
+        .memoryOffset = aliasTensor->vkMemoryOffset_,
+    };
+    VK_ASSERT(vkBindImageMemory2(vkDevice_, 1, &bindInfo));
+  } else if (LVK_VULKAN_USE_VMA && numPlanes == 1) {
     // VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE requires the host-access flag to land in host-visible memory so vmaMapMemory() below works
     const VmaAllocationCreateInfo vmaAllocInfo = {
         .flags = memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
@@ -5479,6 +5550,16 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
 
   if (!writeTextureDescriptor(handle.index())) {
     awaitingCreation_ = true;
+  }
+
+  if (aliasTensor) {
+    aliasTensor->aliasTexture_ = handle;
+    const lvk::VulkanImmediateCommands::CommandBufferWrapper& wrapper = immediate_->acquire();
+    const VulkanImage* img = texturesPool_.get(handle);
+    img->transitionLayout(wrapper.cmdBuf_,
+                          VK_IMAGE_LAYOUT_GENERAL,
+                          VkImageSubresourceRange{img->getImageAspectFlags(), 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS});
+    immediate_->submit(wrapper);
   }
 
   if (desc.data) {
@@ -6402,15 +6483,26 @@ VkPipeline lvk::VulkanContext::getVkPipeline(ComputePipelineHandle handle) {
       VK_ASSERT(lvk::setDebugObjectName(vkDevice_, VK_OBJECT_TYPE_PIPELINE_LAYOUT, (uint64_t)cps->pipelineLayout_, pipelineLayoutName));
     }
 
+    VkPipelineShaderStageCreateInfo stage =
+        lvk::getPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, sm->ci, cps->desc_.entryPoint, &siComp);
+    VkShaderModule vkTempShaderModule = VK_NULL_HANDLE;
+    if (config_.enableMLEmulationLayer) {
+      VK_ASSERT(vkCreateShaderModule(vkDevice_, &sm->ci, nullptr, &vkTempShaderModule));
+      stage.pNext = nullptr;
+      stage.module = vkTempShaderModule;
+    }
     const VkComputePipelineCreateInfo ci = {
         .sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO,
         .flags = 0,
-        .stage = lvk::getPipelineShaderStageCreateInfo(VK_SHADER_STAGE_COMPUTE_BIT, sm->ci, cps->desc_.entryPoint, &siComp),
+        .stage = stage,
         .layout = cps->pipelineLayout_,
         .basePipelineHandle = VK_NULL_HANDLE,
         .basePipelineIndex = -1,
     };
     VK_ASSERT(vkCreateComputePipelines(vkDevice_, pipelineCache_, 1, &ci, nullptr, &cps->pipeline_));
+    if (vkTempShaderModule) {
+      vkDestroyShaderModule(vkDevice_, vkTempShaderModule, nullptr);
+    }
     VK_ASSERT(lvk::setDebugObjectName(vkDevice_, VK_OBJECT_TYPE_PIPELINE, (uint64_t)cps->pipeline_, cps->desc_.debugName));
   }
 
@@ -6687,6 +6779,14 @@ void lvk::VulkanContext::destroy(lvk::TextureHandle handle) {
     if (v != VK_NULL_HANDLE) {
       deferredTask(
           std::packaged_task<void()>([device = getVkDevice(), imageView = v]() { vkDestroyImageView(device, imageView, nullptr); }));
+    }
+  }
+
+  if (has_ARM_tensors_) {
+    for (lvk::VulkanTensor& tensor : tensorsPool_.objects_) {
+      if (tensor.aliasTexture_ == handle) {
+        tensor.aliasTexture_ = {};
+      }
     }
   }
 
@@ -7017,8 +7117,9 @@ lvk::Holder<lvk::ShaderModuleHandle> lvk::VulkanContext::createShaderModule(cons
       return false;
     return strstr(code, "[shader(\"") != nullptr;
   };
+  const bool reflect = desc.stage != Stage_DataGraph;
   ShaderModuleState sm =
-      desc.dataSize ? createShaderModuleFromSPIRV(desc.data, desc.dataSize, desc.debugName, &result) // binary
+      desc.dataSize ? createShaderModuleFromSPIRV(desc.data, desc.dataSize, desc.debugName, &result, reflect)
       : isSlang(desc.data) // text
           ? createShaderModuleFromSlang(desc.stage, desc.data, desc.entryPointName, desc.optimizeSPIRV, desc.debugName, &result)
           : createShaderModuleFromGLSL(desc.stage, desc.data, desc.optimizeSPIRV, desc.debugName, &result);
@@ -7035,7 +7136,8 @@ lvk::Holder<lvk::ShaderModuleHandle> lvk::VulkanContext::createShaderModule(cons
 lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromSPIRV(const void* spirv,
                                                                        size_t numBytes,
                                                                        const char* debugName,
-                                                                       Result* outResult) const {
+                                                                       Result* outResult,
+                                                                       bool reflect) const {
   (void)debugName;
 
   if (!spirv || !numBytes) {
@@ -7043,18 +7145,20 @@ lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromSPIRV(const voi
     return {};
   }
 
-  SpvReflectShaderModule mdl;
-  const SpvReflectResult result = spvReflectCreateShaderModule(numBytes, spirv, &mdl);
-  (void)LVK_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
-  SCOPE_EXIT {
-    spvReflectDestroyShaderModule(&mdl);
-  };
-
   uint32_t pushConstantsSize = 0;
 
-  for (uint32_t i = 0; i < mdl.push_constant_block_count; ++i) {
-    const SpvReflectBlockVariable& block = mdl.push_constant_blocks[i];
-    pushConstantsSize = std::max(pushConstantsSize, block.offset + block.size);
+  if (reflect) {
+    SpvReflectShaderModule mdl;
+    const SpvReflectResult result = spvReflectCreateShaderModule(numBytes, spirv, &mdl);
+    (void)LVK_VERIFY(result == SPV_REFLECT_RESULT_SUCCESS);
+    SCOPE_EXIT {
+      spvReflectDestroyShaderModule(&mdl);
+    };
+
+    for (uint32_t i = 0; i < mdl.push_constant_block_count; ++i) {
+      const SpvReflectBlockVariable& block = mdl.push_constant_blocks[i];
+      pushConstantsSize = std::max(pushConstantsSize, block.offset + block.size);
+    }
   }
 
   const VkShaderModuleCreateInfo ci = {
@@ -7093,6 +7197,51 @@ lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromGLSL(ShaderStag
     }
   };
 
+  auto addTensorDeclarations = [this, source, &sourcePatched]() -> void {
+    if (!has_ARM_tensors_ || !(strstr(source, "tensorARM") || strstr(source, "kTensors") || strstr(source, "LVK_DECLARE_TENSORS"))) {
+      return;
+    }
+    char header[512] = {0};
+    (void)snprintf(
+        header,
+        sizeof(header) - 1,
+        "#extension GL_ARM_tensors : require\n"
+        "#extension GL_EXT_shader_explicit_arithmetic_types : require\n"
+        "#define LVK_MAX_TENSORS %u\n"
+        "#define LVK_DECLARE_TENSORS(type, rank, name) layout(set = 0, binding = 5) uniform tensorARM<type, rank> name[LVK_MAX_TENSORS]\n",
+        maxBindlessTensors_);
+    sourcePatched += header;
+    const struct TensorType {
+      const char* glslType;
+      const char* suffix;
+    } kTensorTypes[] = {
+        {"float", "F32"},
+        {"float16_t", "F16"},
+        {"int", "I32"},
+        {"uint", "U32"},
+        {"int16_t", "I16"},
+        {"uint16_t", "U16"},
+        {"int8_t", "I8"},
+        {"uint8_t", "U8"},
+    };
+    for (const TensorType& t : kTensorTypes) {
+      for (uint32_t rank = 1; rank <= LVK_TENSOR_MAX_RANK; rank++) {
+        char name[64] = {0};
+        (void)snprintf(name, sizeof(name) - 1, "kTensors%s_%u", t.suffix, rank);
+        if (strstr(source, name)) {
+          char decl[256] = {0};
+          (void)snprintf(decl,
+                         sizeof(decl) - 1,
+                         "layout(set = 0, binding = 5) uniform tensorARM<%s, %u> %s[LVK_MAX_TENSORS];\n",
+                         t.glslType,
+                         rank,
+                         name);
+          sourcePatched += decl;
+        }
+      }
+    }
+  };
+
   if (strstr(source, "#version ") == nullptr) {
     if (vkStage == VK_SHADER_STAGE_TASK_BIT_EXT || vkStage == VK_SHADER_STAGE_MESH_BIT_EXT) {
       sourcePatched +=
@@ -7116,6 +7265,7 @@ lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromGLSL(ShaderStag
           "#extension GL_EXT_samplerless_texture_functions : require\n"
           "#extension GL_EXT_shader_explicit_arithmetic_types_float16 : require\n";
       addCode("gl_PrimitiveShadingRateEXT", "#extension GL_EXT_fragment_shading_rate : require\n");
+      addTensorDeclarations();
     }
     if (vkStage == VK_SHADER_STAGE_FRAGMENT_BIT) {
       // Note how nonuniformEXT() should be used:
@@ -7130,6 +7280,7 @@ lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromGLSL(ShaderStag
           "#extension GL_EXT_shader_explicit_arithmetic_types_int64 : enable\n"
           "#extension GL_EXT_shader_atomic_int64 : enable\n";
       addCode("gl_ShadingRateEXT", "#extension GL_EXT_fragment_shading_rate : require\n");
+      addTensorDeclarations();
       addCode("kTLAS[",
               "#extension GL_EXT_buffer_reference : require\n"
               "#extension GL_EXT_ray_query : require\n"
@@ -7220,7 +7371,8 @@ lvk::ShaderModuleState lvk::VulkanContext::createShaderModuleFromGLSL(ShaderStag
       lvk::getGlslangResource(getVkPhysicalDeviceProperties().limits, has_EXT_mesh_shader_ ? &vkMeshShaderProperties_ : nullptr);
 
   std::vector<uint8_t> spirv;
-  lvk::Result::setResult(outResult, lvk::compileShaderGlslang(stage, source, &spirv, config_.generateSPIRVDebugInfo, &glslangResource));
+  lvk::Result::setResult(outResult,
+                         lvk::compileShaderGlslang(stage, source, &spirv, config_.generateSPIRVDebugInfo, &glslangResource, optimizeSPIRV));
   if (optimizeSPIRV) {
     lvk::optimizeSPIRV(spirv);
   }
@@ -7489,8 +7641,67 @@ lvk::AccelStructSizes lvk::VulkanContext::getAccelStructSizes(const AccelStructD
   };
 }
 
+bool lvk::VulkanContext::hasNativeTensorSupport() const {
+  const VkApplicationInfo appInfo = {
+      .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
+      .pApplicationName = "LVK/Vulkan probe",
+      .pEngineName = "LVK/Vulkan",
+      .apiVersion = VK_API_VERSION_1_3,
+  };
+  const VkInstanceCreateInfo ci = {
+      .sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
+      .pApplicationInfo = &appInfo,
+  };
+  VkInstance instance = VK_NULL_HANDLE;
+  if (vkCreateInstance(&ci, nullptr, &instance) != VK_SUCCESS || !instance) {
+    return false;
+  }
+  PFN_vkEnumeratePhysicalDevices enumeratePhysicalDevices =
+      (PFN_vkEnumeratePhysicalDevices)vkGetInstanceProcAddr(instance, "vkEnumeratePhysicalDevices");
+  PFN_vkEnumerateDeviceExtensionProperties enumerateDeviceExtensionProperties =
+      (PFN_vkEnumerateDeviceExtensionProperties)vkGetInstanceProcAddr(instance, "vkEnumerateDeviceExtensionProperties");
+  PFN_vkDestroyInstance destroyInstance = (PFN_vkDestroyInstance)vkGetInstanceProcAddr(instance, "vkDestroyInstance");
+  bool hasTensors = false;
+  if (enumeratePhysicalDevices && enumerateDeviceExtensionProperties) {
+    uint32_t numDevices = 0;
+    enumeratePhysicalDevices(instance, &numDevices, nullptr);
+    std::vector<VkPhysicalDevice> devices(numDevices);
+    enumeratePhysicalDevices(instance, &numDevices, devices.data());
+    for (VkPhysicalDevice device : devices) {
+      uint32_t numExtensions = 0;
+      enumerateDeviceExtensionProperties(device, nullptr, &numExtensions, nullptr);
+      std::vector<VkExtensionProperties> extensions(numExtensions);
+      enumerateDeviceExtensionProperties(device, nullptr, &numExtensions, extensions.data());
+      hasTensors = hasTensors || hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, extensions);
+    }
+  }
+  if (destroyInstance) {
+    destroyInstance(instance, nullptr);
+  }
+  return hasTensors;
+}
+
 lvk::Result lvk::VulkanContext::createInstance() {
   vkInstance_ = VK_NULL_HANDLE;
+
+  if (config_.enableMLEmulationLayer && config_.mlEmulationLayerPath && *config_.mlEmulationLayerPath) {
+    const char* kEnvVar = "VK_ADD_LAYER_PATH";
+    std::string paths = config_.mlEmulationLayerPath;
+    if (const char* existing = std::getenv(kEnvVar); existing && *existing) {
+#if defined(_WIN32)
+      paths = paths + ";" + existing;
+#else
+      paths = paths + ":" + existing;
+#endif
+    }
+#if defined(_WIN32)
+    (void)_putenv_s(kEnvVar, paths.c_str());
+#else
+    (void)setenv(kEnvVar, paths.c_str(), 1);
+#endif
+  }
+
+  std::vector<const char*> enabledLayers;
 
   // check if we have validation layers in the system
   {
@@ -7510,6 +7721,41 @@ lvk::Result lvk::VulkanContext::createInstance() {
       }
       config_.enableValidation = false; // no validation layers available
     }();
+
+    if (config_.enableValidation) {
+      for (const char* layer : kDefaultValidationLayers) {
+        enabledLayers.push_back(layer);
+      }
+    }
+
+    if (config_.enableMLEmulationLayer && hasNativeTensorSupport()) {
+      LLOGL("Arm ML Emulation Layer for Vulkan: not needed, VK_ARM_tensors is supported natively\n");
+      config_.enableMLEmulationLayer = false;
+    }
+
+    if (config_.enableMLEmulationLayer) {
+      const char* kMLEmulationLayers[] = {"VK_LAYER_ML_Graph_Emulation", "VK_LAYER_ML_Tensor_Emulation"};
+      bool hasAllLayers = true;
+      for (const char* layer : kMLEmulationLayers) {
+        bool found = false;
+        for (const VkLayerProperties& props : layerProperties) {
+          found = found || !strcmp(props.layerName, layer);
+        }
+        if (!found) {
+          LLOGW("Arm ML Emulation Layer `%s` is not available (VK_ADD_LAYER_PATH=%s)\n",
+                layer,
+                std::getenv("VK_ADD_LAYER_PATH") ? std::getenv("VK_ADD_LAYER_PATH") : "");
+          hasAllLayers = false;
+        }
+      }
+      if (hasAllLayers) {
+        enabledLayers.insert(enabledLayers.begin(), std::begin(kMLEmulationLayers), std::end(kMLEmulationLayers));
+        LLOGL("Arm ML Emulation Layer for Vulkan: enabled\n");
+        lvk::enableDebugObjectNames(false);
+      } else {
+        config_.enableMLEmulationLayer = false;
+      }
+    }
   }
 
   std::vector<VkExtensionProperties> allInstanceExtensions;
@@ -7674,8 +7920,8 @@ lvk::Result lvk::VulkanContext::createInstance() {
       .pNext = hasExtension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME, allInstanceExtensions) ? &layerSettingsCreateInfo : nullptr,
       .flags = hasPortabilityEnumeration ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR : 0u,
       .pApplicationInfo = &appInfo,
-      .enabledLayerCount = config_.enableValidation ? (uint32_t)LVK_ARRAY_NUM_ELEMENTS(kDefaultValidationLayers) : 0u,
-      .ppEnabledLayerNames = config_.enableValidation ? kDefaultValidationLayers : nullptr,
+      .enabledLayerCount = (uint32_t)enabledLayers.size(),
+      .ppEnabledLayerNames = enabledLayers.empty() ? nullptr : enabledLayers.data(),
       .enabledExtensionCount = (uint32_t)enabledInstanceExtensionNames_.size(),
       .ppEnabledExtensionNames = enabledInstanceExtensionNames_.data(),
   };
@@ -8014,7 +8260,6 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   }
   if (hasExtension(VK_EXT_MESH_SHADER_EXTENSION_NAME, allDeviceExtensions)) {
     addNextPhysicalDeviceProperties(&vkMeshShaderProperties_);
-    // check which features are supported before enabling them
     vkMeshShaderFeatures_.pNext = vkFeatures10_.pNext;
     vkFeatures10_.pNext = &vkMeshShaderFeatures_;
   }
@@ -8028,6 +8273,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     addNextPhysicalDeviceProperties(&vkFragmentShadingRateProperties_);
   }
   if (hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, allDeviceExtensions)) {
+    addNextPhysicalDeviceProperties(&vkTensorProperties_);
     vkTensorFeatures_.pNext = vkFeatures10_.pNext;
     vkFeatures10_.pNext = &vkTensorFeatures_;
   }
@@ -8183,6 +8429,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .shaderStorageTexelBufferArrayDynamicIndexing = VK_TRUE,
       .shaderSampledImageArrayNonUniformIndexing = VK_TRUE,
       .shaderStorageImageArrayNonUniformIndexing = VK_TRUE,
+      .descriptorBindingUniformBufferUpdateAfterBind = vkFeatures12_.descriptorBindingUniformBufferUpdateAfterBind,
       .descriptorBindingSampledImageUpdateAfterBind = VK_TRUE,
       .descriptorBindingStorageImageUpdateAfterBind = VK_TRUE,
       .descriptorBindingUpdateUnusedWhilePending = VK_TRUE,
@@ -8243,16 +8490,6 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR,
       .rayQuery = VK_TRUE,
   };
-  VkPhysicalDeviceTensorFeaturesARM tensorFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM,
-      .shaderTensorAccess = VK_TRUE,
-      .tensors = VK_TRUE,
-  };
-  VkPhysicalDeviceDataGraphFeaturesARM dataGraphFeatures = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_FEATURES_ARM,
-      .dataGraph = VK_TRUE,
-      .dataGraphShaderModule = VK_TRUE,
-  };
   VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT rayTracingInvocationReorderFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT,
       .rayTracingInvocationReorder = VK_TRUE,
@@ -8299,6 +8536,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT,
       .provokingVertexLast = VK_TRUE,
   };
+  VkPhysicalDeviceShaderReplicatedCompositesFeaturesEXT shaderReplicatedCompositesFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_REPLICATED_COMPOSITES_FEATURES_EXT,
+      .shaderReplicatedComposites = VK_TRUE,
+  };
   VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT fragmentShaderInterlockFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT,
       .fragmentShaderSampleInterlock = VK_TRUE,
@@ -8331,6 +8572,23 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .pipelineFragmentShadingRate = VK_TRUE,
       .primitiveFragmentShadingRate = VK_TRUE,
       .attachmentFragmentShadingRate = VK_TRUE,
+  };
+  VkPhysicalDeviceTensorFeaturesARM tensorFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM,
+      .tensorNonPacked = vkTensorFeatures_.tensorNonPacked,
+      .shaderTensorAccess = VK_TRUE,
+      .shaderStorageTensorArrayDynamicIndexing = VK_TRUE,
+      .shaderStorageTensorArrayNonUniformIndexing = vkTensorFeatures_.shaderStorageTensorArrayNonUniformIndexing,
+      .descriptorBindingStorageTensorUpdateAfterBind = VK_TRUE,
+      .tensors = VK_TRUE,
+  };
+  VkPhysicalDeviceDataGraphFeaturesARM dataGraphFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_FEATURES_ARM,
+      .dataGraph = VK_TRUE,
+      .dataGraphUpdateAfterBind = vkDataGraphFeatures_.dataGraphUpdateAfterBind,
+      .dataGraphSpecializationConstants = vkDataGraphFeatures_.dataGraphSpecializationConstants,
+      .dataGraphDescriptorBuffer = VK_FALSE,
+      .dataGraphShaderModule = VK_TRUE,
   };
 
   auto addExtension = [&allDeviceExtensions, this, &createInfoNext](const char* name, void* features = nullptr) mutable -> void {
@@ -8394,20 +8652,6 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
                         has_KHR_acceleration_structure_,
                         &accelerationStructureFeatures);
   addOptionalExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, has_KHR_ray_query_, &rayQueryFeatures);
-  // only ask for the feature bits the device reports, otherwise vkCreateDevice() fails
-  if (vkTensorFeatures_.tensors && vkTensorFeatures_.shaderTensorAccess) {
-    addOptionalExtension(VK_ARM_TENSORS_EXTENSION_NAME, has_ARM_tensors_, &tensorFeatures);
-  }
-  if (has_ARM_tensors_ && vkDataGraphFeatures_.dataGraph && vkDataGraphFeatures_.dataGraphShaderModule) {
-    // data graphs consume tensors, and their pipelines are built through VK_KHR_deferred_host_operations
-    bool hasDeferredHostOperations = has_KHR_acceleration_structure_;
-    if (!hasDeferredHostOperations) {
-      addOptionalExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, hasDeferredHostOperations);
-    }
-    if (hasDeferredHostOperations) {
-      addOptionalExtension(VK_ARM_DATA_GRAPH_EXTENSION_NAME, has_ARM_data_graph_, &dataGraphFeatures);
-    }
-  }
   addOptionalExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, has_KHR_ray_tracing_pipeline_, &rayTracingFeatures);
   addOptionalExtension(
       VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, has_EXT_ray_tracing_invocation_reorder, &rayTracingInvocationReorderFeatures);
@@ -8432,10 +8676,42 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
                        &dynamicRenderingUnusedAttachmentsFeatures);
   addOptionalExtension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME, has_EXT_provoking_vertex_, &provokingVertexFeatures);
   addOptionalExtension(
+      VK_EXT_SHADER_REPLICATED_COMPOSITES_EXTENSION_NAME, has_EXT_shader_replicated_composites_, &shaderReplicatedCompositesFeatures);
+  addOptionalExtension(
       VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, has_EXT_fragment_shader_interlock_, &fragmentShaderInterlockFeatures);
   addOptionalExtension(VK_KHR_SHARED_PRESENTABLE_IMAGE_EXTENSION_NAME, has_KHR_shared_presentable_image_);
   addOptionalExtension(
       VK_KHR_PRESENT_MODE_FIFO_LATEST_READY_EXTENSION_NAME, has_KHR_present_mode_fifo_latest_ready_, &presentModeLatestReadyFeatures);
+
+  {
+    const bool canUseTensors =
+        vkTensorFeatures_.tensors && vkTensorFeatures_.shaderTensorAccess && vkTensorFeatures_.shaderStorageTensorArrayDynamicIndexing &&
+        vkTensorFeatures_.descriptorBindingStorageTensorUpdateAfterBind && vkTensorProperties_.shaderTensorSupportedStages;
+    if (canUseTensors && addOptionalExtension(VK_ARM_TENSORS_EXTENSION_NAME, has_ARM_tensors_, &tensorFeatures)) {
+      tensorShaderStages_ = vkTensorProperties_.shaderTensorSupportedStages;
+      maxBindlessTensors_ = std::min(256u, std::max(16u, vkTensorProperties_.maxDescriptorSetUpdateAfterBindStorageTensors));
+      bool hasDeferredHostOperations = has_KHR_acceleration_structure_;
+      if (!hasDeferredHostOperations) {
+        addOptionalExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, hasDeferredHostOperations);
+      }
+      if (hasDeferredHostOperations && vkDataGraphFeatures_.dataGraph && vkDataGraphFeatures_.dataGraphShaderModule) {
+        addOptionalExtension(VK_ARM_DATA_GRAPH_EXTENSION_NAME, has_ARM_data_graph_, &dataGraphFeatures);
+      }
+    } else if (hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, allDeviceExtensions)) {
+      LLOGW("VK_ARM_tensors is present but lacks the features required for bindless tensors (update-after-bind, dynamic indexing)\n");
+    }
+    if (has_ARM_data_graph_) {
+      uint32_t numQueueFamilies = 0;
+      vkGetPhysicalDeviceQueueFamilyProperties2(vkPhysicalDevice_, &numQueueFamilies, nullptr);
+      std::vector<VkQueueFamilyProperties2> queueFamilies(numQueueFamilies, {.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+      vkGetPhysicalDeviceQueueFamilyProperties2(vkPhysicalDevice_, &numQueueFamilies, queueFamilies.data());
+      const uint32_t idx = deviceQueues_.graphicsQueueFamilyIndex;
+      if (idx >= numQueueFamilies || !(queueFamilies[idx].queueFamilyProperties.queueFlags & VK_QUEUE_DATA_GRAPH_BIT_ARM)) {
+        LLOGW("VK_ARM_data_graph: the graphics queue family does not support data graph dispatches\n");
+        has_ARM_data_graph_ = false;
+      }
+    }
+  }
 
   if (has_EXT_host_image_copy_) {
     // query VK_EXT_host_image_copy properties (copy dst layouts + memory-type requirements)
@@ -8725,6 +9001,25 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     LVK_ASSERT(texturesPool_.numObjects() == 1);
   }
 
+  if (has_ARM_tensors_) {
+    Result result;
+    dummyTensor_ = this->createTensor(
+                           {
+                               .format = lvk::Format_R_UI8,
+                               .rank = 1,
+                               .dimensions = {4},
+                               .tiling = TensorTiling_Linear,
+                               .usage = TensorUsageBits_Shader,
+                           },
+                           "Dummy tensor",
+                           &result)
+                       .release();
+    if (!LVK_VERIFY(result.isOk())) {
+      return result;
+    }
+    LVK_ASSERT(tensorsPool_.numObjects() == 1);
+  }
+
   // default sampler
   LVK_ASSERT(samplersPool_.numObjects() == 0);
   createSampler(
@@ -8886,15 +9181,21 @@ lvk::Result lvk::VulkanContext::recreateSurface(void* window, void* display, uin
 lvk::Result lvk::VulkanContext::growDescriptorPool(VulkanContext::DescriptorSet& dset,
                                                    uint32_t maxTextures,
                                                    uint32_t maxSamplers,
-                                                   uint32_t maxAccelStructs) {
+                                                   uint32_t maxAccelStructs,
+                                                   uint32_t maxTensors) {
   if (maxTextures == dset.maxTextures && maxSamplers == dset.maxSamplers && maxAccelStructs == dset.maxAccelStructs &&
-      !awaitingNewImmutableSamplers_) {
+      maxTensors == dset.maxTensors && !awaitingNewImmutableSamplers_) {
     return Result();
   }
 
   dset.maxTextures = maxTextures;
   dset.maxSamplers = maxSamplers;
   dset.maxAccelStructs = maxAccelStructs;
+  dset.maxTensors = maxTensors;
+
+  if (has_ARM_tensors_ && !LVK_VERIFY(maxTensors <= vkTensorProperties_.maxDescriptorSetUpdateAfterBindStorageTensors)) {
+    LLOGW("Max Tensors exceeded: %u (max %u)", maxTensors, vkTensorProperties_.maxDescriptorSetUpdateAfterBindStorageTensors);
+  }
 
 #if LVK_VULKAN_PRINT_COMMANDS
   LLOGL("growDescriptorPool(%u, %u)\n", maxTextures, maxSamplers);
@@ -8972,7 +9273,14 @@ lvk::Result lvk::VulkanContext::growDescriptorPool(VulkanContext::DescriptorSet&
                          (uint32_t)immutableSamplers.size() ? (workaround_noYcbcrSamplerArray_ ? 1u : maxTextures) : 0,
                          stageFlags,
                          immutableSamplersData),
-      lvk::getDSLBinding(kBinding_AccelerationStructures, VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, maxAccelStructs, stageFlags),
+      lvk::getDSLBinding(kBinding_AccelerationStructures,
+                         has_KHR_acceleration_structure_ ? VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                         has_KHR_acceleration_structure_ ? maxAccelStructs : 0,
+                         stageFlags),
+      lvk::getDSLBinding(kBinding_Tensors,
+                         has_ARM_tensors_ ? VK_DESCRIPTOR_TYPE_TENSOR_ARM : VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+                         has_ARM_tensors_ ? maxTensors : 0,
+                         stageFlags & (has_ARM_tensors_ ? tensorShaderStages_ : stageFlags)),
   };
   const uint32_t flags = VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT | VK_DESCRIPTOR_BINDING_UPDATE_UNUSED_WHILE_PENDING_BIT |
                          VK_DESCRIPTOR_BINDING_PARTIALLY_BOUND_BIT;
@@ -8980,16 +9288,18 @@ lvk::Result lvk::VulkanContext::growDescriptorPool(VulkanContext::DescriptorSet&
   for (int i = 0; i < kBinding_NumBindings; ++i) {
     bindingFlags[i] = flags;
   }
+  const uint32_t numBindings = has_ARM_tensors_ ? kBinding_NumBindings
+                                                : (has_KHR_acceleration_structure_ ? kBinding_NumBindings - 1 : kBinding_NumBindings - 2);
   const VkDescriptorSetLayoutBindingFlagsCreateInfo setLayoutBindingFlagsCI = {
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO_EXT,
-      .bindingCount = uint32_t(has_KHR_acceleration_structure_ ? kBinding_NumBindings : kBinding_NumBindings - 1),
+      .bindingCount = numBindings,
       .pBindingFlags = bindingFlags,
   };
   const VkDescriptorSetLayoutCreateInfo dslci = {
       .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
       .pNext = &setLayoutBindingFlagsCI,
       .flags = VK_DESCRIPTOR_SET_LAYOUT_CREATE_UPDATE_AFTER_BIND_POOL_BIT_EXT,
-      .bindingCount = uint32_t(has_KHR_acceleration_structure_ ? kBinding_NumBindings : kBinding_NumBindings - 1),
+      .bindingCount = numBindings,
       .pBindings = bindings,
   };
   VK_ASSERT(vkCreateDescriptorSetLayout(vkDevice_, &dslci, nullptr, &dset.vkDSL));
@@ -9012,6 +9322,9 @@ lvk::Result lvk::VulkanContext::growDescriptorPool(VulkanContext::DescriptorSet&
     }
     if (has_KHR_acceleration_structure_) {
       poolSizes[numPoolSizes++] = VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR, maxAccelStructs};
+    }
+    if (has_ARM_tensors_) {
+      poolSizes[numPoolSizes++] = VkDescriptorPoolSize{VK_DESCRIPTOR_TYPE_TENSOR_ARM, maxTensors};
     }
     LVK_ASSERT(numPoolSizes <= kBinding_NumBindings);
     const VkDescriptorPoolCreateInfo ci = {
@@ -9359,6 +9672,7 @@ void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
   uint32_t newMaxTextures = std::max(dset.maxTextures, 16u);
   uint32_t newMaxSamplers = std::max(dset.maxSamplers, 16u);
   uint32_t newMaxAccelStructs = std::max(dset.maxAccelStructs, workaround_fixedSizeAccelStructArray_ ? 128u : 1u);
+  uint32_t newMaxTensors = std::max(dset.maxTensors, std::max(maxBindlessTensors_, 16u));
 
   while (texturesPool_.objects_.size() > newMaxTextures) {
     newMaxTextures *= 2;
@@ -9369,7 +9683,10 @@ void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
   while (accelStructuresPool_.objects_.size() > newMaxAccelStructs) {
     newMaxAccelStructs *= 2;
   }
-  growDescriptorPool(dset, newMaxTextures, newMaxSamplers, newMaxAccelStructs);
+  while (tensorsPool_.objects_.size() > newMaxTensors) {
+    newMaxTensors *= 2;
+  }
+  growDescriptorPool(dset, newMaxTextures, newMaxSamplers, newMaxAccelStructs, newMaxTensors);
 
   // 1. Sampled and storage images
   std::vector<VkDescriptorImageInfo> infoSampledImages;
@@ -9467,8 +9784,38 @@ void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
       .pAccelerationStructures = handlesAccelStructs.data(),
   };
 
+  std::vector<VkTensorViewARM> tensorViews;
+
+  if (has_ARM_tensors_ && !tensorsPool_.objects_.empty()) {
+    tensorViews.reserve(tensorsPool_.objects_.size());
+    const VkTensorViewARM dummyTensorView = tensorsPool_.objects_[0].vkTensorView_;
+    LVK_ASSERT(dummyTensorView);
+    for (const VulkanTensor& tensor : tensorsPool_.objects_) {
+      const bool isShaderTensor = tensor.vkTensorView_ && tensor.isShaderTensor();
+      tensorViews.push_back(isShaderTensor ? tensor.vkTensorView_ : dummyTensorView);
+    }
+  }
+
+  const VkWriteDescriptorSetTensorARM writeTensors = {
+      .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_TENSOR_ARM,
+      .tensorViewCount = (uint32_t)tensorViews.size(),
+      .pTensorViews = tensorViews.data(),
+  };
+
   VkWriteDescriptorSet write[kBinding_NumBindings] = {};
   uint32_t numWrites = 0;
+
+  if (!tensorViews.empty()) {
+    write[numWrites++] = VkWriteDescriptorSet{
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = &writeTensors,
+        .dstSet = dset.vkDSet,
+        .dstBinding = kBinding_Tensors,
+        .dstArrayElement = 0,
+        .descriptorCount = (uint32_t)tensorViews.size(),
+        .descriptorType = VK_DESCRIPTOR_TYPE_TENSOR_ARM,
+    };
+  }
 
   if (!handlesAccelStructs.empty() && dummyTLAS_) {
     write[numWrites++] = VkWriteDescriptorSet{
@@ -9666,14 +10013,17 @@ void* lvk::VulkanContext::getVmaAllocator() const {
 }
 
 void lvk::VulkanContext::processDeferredTasks() const {
-  std::vector<DeferredTask>::iterator it = pimpl_->deferredTasks_.begin();
+  std::vector<DeferredTask>& tasks = pimpl_->deferredTasks_;
 
-  while (it != pimpl_->deferredTasks_.end() && immediate_->isReady(it->handle_, true) &&
-         (!immediateCompute_ || immediateCompute_->isReady(it->handleCompute_, true))) {
-    (it++)->task_();
+  size_t numProcessed = 0;
+
+  while (numProcessed < tasks.size() && immediate_->isReady(tasks[numProcessed].handle_, true) &&
+         (!immediateCompute_ || immediateCompute_->isReady(tasks[numProcessed].handleCompute_, true))) {
+    std::packaged_task<void()> task = std::move(tasks[numProcessed++].task_);
+    task();
   }
 
-  pimpl_->deferredTasks_.erase(pimpl_->deferredTasks_.begin(), it);
+  tasks.erase(tasks.begin(), tasks.begin() + numProcessed);
 }
 
 void lvk::VulkanContext::waitDeferredTasks() {
@@ -9742,4 +10092,1326 @@ bool lvk::VulkanContext::supportsTextureFormat(Format format, TextureUsageFlags 
   vkGetPhysicalDeviceFormatProperties2(getVkPhysicalDevice(), vkFormat, &props);
 
   return (props.formatProperties.optimalTilingFeatures & requiredFeatures) == requiredFeatures;
+}
+
+namespace {
+
+VkTensorUsageFlagsARM tensorUsageToVkTensorUsage(uint8_t usage) {
+  VkTensorUsageFlagsARM flags = 0;
+  if (usage & lvk::TensorUsageBits_Shader) {
+    flags |= VK_TENSOR_USAGE_SHADER_BIT_ARM;
+  }
+  if (usage & lvk::TensorUsageBits_TransferSrc) {
+    flags |= VK_TENSOR_USAGE_TRANSFER_SRC_BIT_ARM;
+  }
+  if (usage & lvk::TensorUsageBits_TransferDst) {
+    flags |= VK_TENSOR_USAGE_TRANSFER_DST_BIT_ARM;
+  }
+  if (usage & lvk::TensorUsageBits_ImageAliasing) {
+    flags |= VK_TENSOR_USAGE_IMAGE_ALIASING_BIT_ARM;
+  }
+  if (usage & lvk::TensorUsageBits_DataGraph) {
+    flags |= VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM;
+  }
+  return flags;
+}
+
+uint8_t vkTensorUsageToTensorUsage(VkTensorUsageFlagsARM flags) {
+  uint8_t usage = 0;
+  if (flags & VK_TENSOR_USAGE_SHADER_BIT_ARM) {
+    usage |= lvk::TensorUsageBits_Shader;
+  }
+  if (flags & VK_TENSOR_USAGE_TRANSFER_SRC_BIT_ARM) {
+    usage |= lvk::TensorUsageBits_TransferSrc;
+  }
+  if (flags & VK_TENSOR_USAGE_TRANSFER_DST_BIT_ARM) {
+    usage |= lvk::TensorUsageBits_TransferDst;
+  }
+  if (flags & VK_TENSOR_USAGE_IMAGE_ALIASING_BIT_ARM) {
+    usage |= lvk::TensorUsageBits_ImageAliasing;
+  }
+  if (flags & VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM) {
+    usage |= lvk::TensorUsageBits_DataGraph;
+  }
+  return usage;
+}
+
+uint32_t findMemoryTypeIndex(VkPhysicalDevice physDev, uint32_t memoryTypeBits, VkMemoryPropertyFlags flags) {
+  VkPhysicalDeviceMemoryProperties2 props = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_MEMORY_PROPERTIES_2};
+  vkGetPhysicalDeviceMemoryProperties2(physDev, &props);
+  for (uint32_t i = 0; i < props.memoryProperties.memoryTypeCount; i++) {
+    const bool hasProperties = (props.memoryProperties.memoryTypes[i].propertyFlags & flags) == flags;
+    if ((memoryTypeBits & (1u << i)) && hasProperties) {
+      return i;
+    }
+  }
+  return 0;
+}
+
+void copyTensorDataStrided(void* strided,
+                           void* packed,
+                           const lvk::VulkanTensor& tensor,
+                           uint64_t packedOffset,
+                           uint64_t size,
+                           bool packedToStrided) {
+  const uint32_t rank = tensor.rank_;
+  const uint64_t elementSize = tensor.elementSize_;
+  LVK_ASSERT(rank > 0 && elementSize > 0);
+  LVK_ASSERT(packedOffset % elementSize == 0 && size % elementSize == 0);
+
+  uint64_t packedStrides[lvk::LVK_TENSOR_MAX_RANK] = {};
+  packedStrides[rank - 1] = 1;
+  for (uint32_t i = rank - 1; i > 0; i--) {
+    packedStrides[i - 1] = packedStrides[i] * (uint64_t)tensor.dimensions_[i];
+  }
+
+  const uint64_t innerLen = (uint64_t)tensor.dimensions_[rank - 1];
+  const uint64_t innerStride = (uint64_t)tensor.strides_[rank - 1];
+  const bool isInnerContiguous = innerStride == elementSize;
+  const uint64_t first = packedOffset / elementSize;
+  const uint64_t last = (packedOffset + size) / elementSize;
+
+  uint64_t e = first;
+  while (e < last) {
+    uint64_t rem = e;
+    uint64_t stridedOffset = 0;
+    for (uint32_t i = 0; i != rank; i++) {
+      const uint64_t idx = rem / packedStrides[i];
+      rem %= packedStrides[i];
+      stridedOffset += idx * (uint64_t)tensor.strides_[i];
+    }
+    const uint64_t innerIdx = e % innerLen;
+    const uint64_t run = std::min(last - e, innerLen - innerIdx);
+    uint8_t* packedPtr = static_cast<uint8_t*>(packed) + (e - first) * elementSize;
+    uint8_t* stridedPtr = static_cast<uint8_t*>(strided) + stridedOffset;
+    if (isInnerContiguous) {
+      if (packedToStrided) {
+        memcpy(stridedPtr, packedPtr, run * elementSize);
+      } else {
+        memcpy(packedPtr, stridedPtr, run * elementSize);
+      }
+    } else {
+      for (uint64_t k = 0; k != run; k++) {
+        if (packedToStrided) {
+          memcpy(stridedPtr + k * innerStride, packedPtr + k * elementSize, elementSize);
+        } else {
+          memcpy(packedPtr + k * elementSize, stridedPtr + k * innerStride, elementSize);
+        }
+      }
+    }
+    e += run;
+  }
+}
+
+VkAccessFlags2 tensorAccessFlagsForStages(VkPipelineStageFlags2 stages) {
+  if (stages & VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT) {
+    return VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT;
+  }
+  VkAccessFlags2 access = 0;
+  if (stages & VK_PIPELINE_STAGE_2_TRANSFER_BIT) {
+    access |= VK_ACCESS_2_TRANSFER_READ_BIT | VK_ACCESS_2_TRANSFER_WRITE_BIT;
+  }
+  if (stages & VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM) {
+    access |= VK_ACCESS_2_DATA_GRAPH_READ_BIT_ARM | VK_ACCESS_2_DATA_GRAPH_WRITE_BIT_ARM;
+  }
+  if (stages & ~(VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM)) {
+    access |= VK_ACCESS_2_SHADER_READ_BIT | VK_ACCESS_2_SHADER_WRITE_BIT;
+  }
+  return access;
+}
+
+} // namespace
+
+uint8_t lvk::VulkanContext::getTensorFormatSupport(Format format, TensorTiling tiling) const {
+  if (!has_ARM_tensors_ || format == Format_Invalid) {
+    return 0;
+  }
+  VkTensorFormatPropertiesARM tensorProps = {.sType = VK_STRUCTURE_TYPE_TENSOR_FORMAT_PROPERTIES_ARM};
+  VkFormatProperties2 props = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &tensorProps};
+  vkGetPhysicalDeviceFormatProperties2(vkPhysicalDevice_, formatToVkFormat(format), &props);
+  const VkFormatFeatureFlags2 features = tiling == TensorTiling_Linear ? tensorProps.linearTilingTensorFeatures
+                                                                       : tensorProps.optimalTilingTensorFeatures;
+  uint8_t usage = 0;
+  if (features & VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM) {
+    usage |= TensorUsageBits_Shader;
+  }
+  if (features & VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT) {
+    usage |= TensorUsageBits_TransferSrc;
+  }
+  if (features & VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT) {
+    usage |= TensorUsageBits_TransferDst;
+  }
+  if (features & VK_FORMAT_FEATURE_2_TENSOR_IMAGE_ALIASING_BIT_ARM) {
+    usage |= TensorUsageBits_ImageAliasing;
+  }
+  if (has_ARM_data_graph_ && (features & VK_FORMAT_FEATURE_2_TENSOR_DATA_GRAPH_BIT_ARM)) {
+    usage |= TensorUsageBits_DataGraph;
+  }
+  return usage;
+}
+
+lvk::TensorProperties lvk::VulkanContext::getTensorProperties() const {
+  if (!has_ARM_tensors_) {
+    return {};
+  }
+  uint32_t stages = 0;
+  for (uint8_t s = Stage_Vert; s <= Stage_Callable; s++) {
+    if (tensorShaderStages_ & shaderStageToVkShaderStage(ShaderStage(s))) {
+      stages |= 1u << s;
+    }
+  }
+  return {
+      .maxTensorDimensionCount = vkTensorProperties_.maxTensorDimensionCount,
+      .maxTensorElements = vkTensorProperties_.maxTensorElements,
+      .maxPerDimensionTensorElements = vkTensorProperties_.maxPerDimensionTensorElements,
+      .maxTensorStride = vkTensorProperties_.maxTensorStride,
+      .maxTensorSize = vkTensorProperties_.maxTensorSize,
+      .maxTensorShaderAccessArrayLength = vkTensorProperties_.maxTensorShaderAccessArrayLength,
+      .maxTensorShaderAccessSize = vkTensorProperties_.maxTensorShaderAccessSize,
+      .maxBindlessTensors = maxBindlessTensors_,
+      .shaderTensorSupportedStages = stages,
+      .shaderTensorArrayNonUniformIndexing = vkTensorFeatures_.shaderStorageTensorArrayNonUniformIndexing == VK_TRUE,
+      .tensorNonPacked = vkTensorFeatures_.tensorNonPacked == VK_TRUE,
+  };
+}
+
+lvk::TensorHandle lvk::VulkanContext::createTensor(const VkTensorDescriptionARM& description,
+                                                   VkMemoryPropertyFlags memFlags,
+                                                   const char* debugName,
+                                                   Result* outResult) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_CREATE);
+
+  VulkanTensor tensor = {
+      .vkFormat_ = description.format,
+      .vkTiling_ = description.tiling,
+      .vkUsageFlags_ = description.usage,
+      .vkMemFlags_ = memFlags,
+      .rank_ = description.dimensionCount,
+      .elementSize_ = lvk::getBytesPerPixel(description.format),
+  };
+  tensor.dataSize_ = tensor.elementSize_;
+  for (uint32_t i = 0; i != tensor.rank_; i++) {
+    tensor.dimensions_[i] = description.pDimensions[i];
+    tensor.dataSize_ *= (uint64_t)description.pDimensions[i];
+  }
+  if (description.tiling == VK_TENSOR_TILING_LINEAR_ARM) {
+    if (description.pStrides) {
+      for (uint32_t i = 0; i != tensor.rank_; i++) {
+        tensor.strides_[i] = description.pStrides[i];
+      }
+    } else {
+      tensor.strides_[tensor.rank_ - 1] = (int64_t)tensor.elementSize_;
+      for (uint32_t i = tensor.rank_ - 1; i > 0; i--) {
+        tensor.strides_[i - 1] = tensor.strides_[i] * tensor.dimensions_[i];
+      }
+    }
+  }
+
+  {
+    VkTensorFormatPropertiesARM tensorProps = {.sType = VK_STRUCTURE_TYPE_TENSOR_FORMAT_PROPERTIES_ARM};
+    VkFormatProperties2 props = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &tensorProps};
+    vkGetPhysicalDeviceFormatProperties2(vkPhysicalDevice_, description.format, &props);
+    const VkFormatFeatureFlags2 features = description.tiling == VK_TENSOR_TILING_LINEAR_ARM ? tensorProps.linearTilingTensorFeatures
+                                                                                             : tensorProps.optimalTilingTensorFeatures;
+    const bool needsShader = (description.usage & VK_TENSOR_USAGE_SHADER_BIT_ARM) != 0;
+    const bool needsDataGraph = (description.usage & VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM) != 0;
+    const bool needsAliasing = (description.usage & VK_TENSOR_USAGE_IMAGE_ALIASING_BIT_ARM) != 0;
+    if (!LVK_VERIFY(!needsShader || (features & VK_FORMAT_FEATURE_2_TENSOR_SHADER_BIT_ARM))) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "The tensor format does not support shader access on this device");
+      return {};
+    }
+    if (!LVK_VERIFY(!needsDataGraph || (features & VK_FORMAT_FEATURE_2_TENSOR_DATA_GRAPH_BIT_ARM))) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "The tensor format does not support data graphs on this device");
+      return {};
+    }
+    if (!LVK_VERIFY(!needsAliasing || (features & VK_FORMAT_FEATURE_2_TENSOR_IMAGE_ALIASING_BIT_ARM))) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "The tensor format does not support image aliasing on this device");
+      return {};
+    }
+  }
+
+  const VkTensorCreateInfoARM ci = {
+      .sType = VK_STRUCTURE_TYPE_TENSOR_CREATE_INFO_ARM,
+      .flags = 0,
+      .pDescription = &description,
+      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+      .queueFamilyIndexCount = 0,
+      .pQueueFamilyIndices = nullptr,
+  };
+  const VkResult createResult = vkCreateTensorARM(vkDevice_, &ci, nullptr, &tensor.vkTensor_);
+  if (!LVK_VERIFY(createResult == VK_SUCCESS)) {
+    lvk::setResultFrom(outResult, createResult);
+    return {};
+  }
+
+  VkMemoryDedicatedRequirements dedicatedRequirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_REQUIREMENTS};
+  VkMemoryRequirements2 requirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2, .pNext = &dedicatedRequirements};
+  {
+    const VkTensorMemoryRequirementsInfoARM ri = {.sType = VK_STRUCTURE_TYPE_TENSOR_MEMORY_REQUIREMENTS_INFO_ARM,
+                                                  .tensor = tensor.vkTensor_};
+    vkGetTensorMemoryRequirementsARM(vkDevice_, &ri, &requirements);
+  }
+
+  const bool isHostVisible = (memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
+  const bool useVma = LVK_VULKAN_USE_VMA && !dedicatedRequirements.requiresDedicatedAllocation;
+
+  if (useVma) {
+    VmaAllocationCreateInfo vmaAllocInfo = {
+        .usage = VMA_MEMORY_USAGE_UNKNOWN,
+        .requiredFlags = memFlags,
+    };
+    if (isHostVisible) {
+      vmaAllocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
+      vmaAllocInfo.preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
+    }
+    VmaAllocationInfo allocInfo = {};
+    const VkResult allocResult = vmaAllocateMemory(
+        (VmaAllocator)getVmaAllocator(), &requirements.memoryRequirements, &vmaAllocInfo, &tensor.vmaAllocation_, &allocInfo);
+    if (!LVK_VERIFY(allocResult == VK_SUCCESS)) {
+      vkDestroyTensorARM(vkDevice_, tensor.vkTensor_, nullptr);
+      lvk::setResultFrom(outResult, allocResult);
+      return {};
+    }
+    tensor.vkMemory_ = allocInfo.deviceMemory;
+    tensor.vkMemoryOffset_ = allocInfo.offset;
+    tensor.vkMemorySize_ = allocInfo.size;
+    tensor.vkMemoryTypeIndex_ = allocInfo.memoryType;
+    tensor.mappedPtr_ = allocInfo.pMappedData;
+    if (isHostVisible) {
+      VkMemoryPropertyFlags allocMemFlags = 0;
+      vmaGetAllocationMemoryProperties((VmaAllocator)getVmaAllocator(), tensor.vmaAllocation_, &allocMemFlags);
+      tensor.isCoherentMemory_ = (allocMemFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+    }
+  } else {
+    const VkMemoryDedicatedAllocateInfoTensorARM dedicatedInfo = {
+        .sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO_TENSOR_ARM,
+        .tensor = tensor.vkTensor_,
+    };
+    VkMemoryPropertyFlags allocMemFlags = 0;
+    const VkResult allocResult = lvk::allocateMemory2(vkPhysicalDevice_,
+                                                      vkDevice_,
+                                                      &requirements,
+                                                      memFlags,
+                                                      &tensor.vkMemory_,
+                                                      &allocMemFlags,
+                                                      dedicatedRequirements.requiresDedicatedAllocation ? &dedicatedInfo : nullptr);
+    if (!LVK_VERIFY(allocResult == VK_SUCCESS)) {
+      vkDestroyTensorARM(vkDevice_, tensor.vkTensor_, nullptr);
+      lvk::setResultFrom(outResult, allocResult);
+      return {};
+    }
+    tensor.vkMemoryOffset_ = 0;
+    tensor.vkMemorySize_ = requirements.memoryRequirements.size;
+    tensor.vkMemoryTypeIndex_ = findMemoryTypeIndex(vkPhysicalDevice_, requirements.memoryRequirements.memoryTypeBits, memFlags);
+    tensor.isCoherentMemory_ = (allocMemFlags & VK_MEMORY_PROPERTY_HOST_COHERENT_BIT) != 0;
+    if (isHostVisible) {
+      VK_ASSERT(vkMapMemory(vkDevice_, tensor.vkMemory_, 0, VK_WHOLE_SIZE, 0, &tensor.mappedPtr_));
+    }
+  }
+
+  {
+    const VkBindTensorMemoryInfoARM bindInfo = {
+        .sType = VK_STRUCTURE_TYPE_BIND_TENSOR_MEMORY_INFO_ARM,
+        .tensor = tensor.vkTensor_,
+        .memory = tensor.vkMemory_,
+        .memoryOffset = tensor.vkMemoryOffset_,
+    };
+    VK_ASSERT(vkBindTensorMemoryARM(vkDevice_, 1, &bindInfo));
+  }
+
+  if (!config_.enableMLEmulationLayer) {
+    VK_ASSERT(lvk::setDebugObjectName(vkDevice_, VK_OBJECT_TYPE_TENSOR_ARM, (uint64_t)tensor.vkTensor_, debugName));
+  }
+
+  if (description.usage & (VK_TENSOR_USAGE_SHADER_BIT_ARM | VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM)) {
+    const VkTensorViewCreateInfoARM vci = {
+        .sType = VK_STRUCTURE_TYPE_TENSOR_VIEW_CREATE_INFO_ARM,
+        .flags = 0,
+        .tensor = tensor.vkTensor_,
+        .format = description.format,
+    };
+    VK_ASSERT(vkCreateTensorViewARM(vkDevice_, &vci, nullptr, &tensor.vkTensorView_));
+    if (!config_.enableMLEmulationLayer) {
+      char viewName[256] = {0};
+      if (debugName && *debugName) {
+        (void)snprintf(viewName, sizeof(viewName) - 1, "Tensor View: %s", debugName);
+      }
+      VK_ASSERT(lvk::setDebugObjectName(vkDevice_, VK_OBJECT_TYPE_TENSOR_VIEW_ARM, (uint64_t)tensor.vkTensorView_, viewName));
+    }
+  }
+
+  Result::setResult(outResult, Result());
+
+  return tensorsPool_.create(std::move(tensor));
+}
+
+lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensor(const TensorDesc& desc, const char* debugName, Result* outResult) {
+  if (!LVK_VERIFY(has_ARM_tensors_)) {
+    Result::setResult(outResult, Result::Code::RuntimeError, "VK_ARM_tensors is not supported (see supportsTensors())");
+    return {};
+  }
+  if (!LVK_VERIFY(desc.rank > 0 && desc.rank <= LVK_TENSOR_MAX_RANK && desc.rank <= vkTensorProperties_.maxTensorDimensionCount)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Unsupported tensor rank");
+    return {};
+  }
+  for (uint32_t i = 0; i != desc.rank; i++) {
+    if (!LVK_VERIFY(desc.dimensions[i] > 0)) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Tensor dimensions must be positive");
+      return {};
+    }
+  }
+  const VkFormat vkFormat = lvk::formatToVkFormat(desc.format);
+  if (!LVK_VERIFY(vkFormat != VK_FORMAT_UNDEFINED && desc.format >= Format_R_UN8 && desc.format <= Format_R_F32)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Tensors need a single-channel format (Format_R_*)");
+    return {};
+  }
+  if (!LVK_VERIFY(desc.usage)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Tensor usage flags are not set");
+    return {};
+  }
+  const bool isHostVisible = desc.storage != StorageType_Device;
+  if (!LVK_VERIFY(!isHostVisible || desc.tiling == TensorTiling_Linear)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Host-visible tensors must use TensorTiling_Linear");
+    return {};
+  }
+
+  uint8_t usage = desc.usage;
+  if (desc.data && !isHostVisible) {
+    usage |= TensorUsageBits_TransferDst;
+  }
+
+  bool hasCustomStrides = false;
+  for (uint32_t i = 0; i != desc.rank; i++) {
+    hasCustomStrides = hasCustomStrides || desc.strides[i] != 0;
+  }
+  if (!LVK_VERIFY(!hasCustomStrides || desc.tiling == TensorTiling_Linear)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Custom strides require TensorTiling_Linear");
+    return {};
+  }
+
+  const VkTensorDescriptionARM description = {
+      .sType = VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+      .tiling = desc.tiling == TensorTiling_Linear ? VK_TENSOR_TILING_LINEAR_ARM : VK_TENSOR_TILING_OPTIMAL_ARM,
+      .format = vkFormat,
+      .dimensionCount = desc.rank,
+      .pDimensions = desc.dimensions,
+      .pStrides = hasCustomStrides ? desc.strides : nullptr,
+      .usage = tensorUsageToVkTensorUsage(usage),
+  };
+
+  const char* name = debugName ? debugName : desc.debugName;
+
+  Result result;
+  const TensorHandle handle = createTensor(description, storageTypeToVkMemoryPropertyFlags(desc.storage), name, &result);
+
+  if (!result.isOk()) {
+    Result::setResult(outResult, result);
+    return {};
+  }
+
+  if ((usage & TensorUsageBits_Shader) && handle.index() >= maxBindlessTensors_) {
+    LLOGW("Tensor index %u is beyond the bindless tensor array size (%u)\n", handle.index(), maxBindlessTensors_);
+    destroy(handle);
+    Result::setResult(outResult, Result::Code::RuntimeError, "Out of bindless tensor slots");
+    return {};
+  }
+
+  awaitingCreation_ = true;
+
+  if (desc.data) {
+    const Result uploadResult = upload(handle, desc.data, getTensorDataSize(desc), 0);
+    if (!uploadResult.isOk()) {
+      destroy(handle);
+      Result::setResult(outResult, uploadResult);
+      return {};
+    }
+  }
+
+  Result::setResult(outResult, Result());
+
+  return {this, handle};
+}
+
+void lvk::VulkanContext::destroy(lvk::TensorHandle handle) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_DESTROY);
+
+  lvk::VulkanTensor* tensor = tensorsPool_.get(handle);
+
+  if (!tensor || !tensor->vkTensor_) {
+    return;
+  }
+
+  LVK_ASSERT_MSG(!tensor->aliasTexture_ || !texturesPool_.get(tensor->aliasTexture_),
+                 "The texture aliasing this tensor is bound to its memory and has to be destroyed first");
+
+  SCOPE_EXIT {
+    *tensor = VulkanTensor{};
+    awaitingCreation_ = true;
+    deferredTask(std::packaged_task<void()>([this, handle]() { tensorsPool_.destroy(handle); }));
+  };
+
+  if (tensor->vkTensorView_) {
+    deferredTask(std::packaged_task<void()>(
+        [device = vkDevice_, view = tensor->vkTensorView_]() { vkDestroyTensorViewARM(device, view, nullptr); }));
+  }
+
+  if (tensor->vmaAllocation_) {
+    deferredTask(std::packaged_task<void()>(
+        [device = vkDevice_, vma = getVmaAllocator(), tensorARM = tensor->vkTensor_, allocation = tensor->vmaAllocation_]() {
+          vkDestroyTensorARM(device, tensorARM, nullptr);
+          vmaFreeMemory((VmaAllocator)vma, allocation);
+        }));
+  } else {
+    if (tensor->mappedPtr_) {
+      vkUnmapMemory(vkDevice_, tensor->vkMemory_);
+    }
+    deferredTask(std::packaged_task<void()>([device = vkDevice_, tensorARM = tensor->vkTensor_, memory = tensor->vkMemory_]() {
+      vkDestroyTensorARM(device, tensorARM, nullptr);
+      vkFreeMemory(device, memory, nullptr);
+    }));
+  }
+}
+
+lvk::Result lvk::VulkanContext::upload(lvk::TensorHandle handle, const void* data, size_t size, size_t offset) {
+  LVK_PROFILER_FUNCTION();
+
+  if (!LVK_VERIFY(data)) {
+    return Result(Result::Code::ArgumentOutOfRange);
+  }
+
+  LVK_ASSERT_MSG(size, "Data size should be non-zero");
+
+  lvk::VulkanTensor* tensor = tensorsPool_.get(handle);
+
+  if (!LVK_VERIFY(tensor && tensor->vkTensor_)) {
+    return Result(Result::Code::ArgumentOutOfRange);
+  }
+
+  if (!LVK_VERIFY(offset + size <= tensor->dataSize_)) {
+    return Result(Result::Code::ArgumentOutOfRange, "Out of range");
+  }
+
+  if (tensor->isMapped()) {
+    LVK_ASSERT(tensor->isLinear());
+    copyTensorDataStrided(tensor->mappedPtr_, const_cast<void*>(data), *tensor, offset, size, true);
+    if (!tensor->isCoherentMemory_) {
+      if (tensor->vmaAllocation_) {
+        vmaFlushAllocation((VmaAllocator)getVmaAllocator(), tensor->vmaAllocation_, 0, VK_WHOLE_SIZE);
+      } else {
+        const VkMappedMemoryRange range = {
+            .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+            .memory = tensor->vkMemory_,
+            .offset = 0,
+            .size = VK_WHOLE_SIZE,
+        };
+        VK_ASSERT(vkFlushMappedMemoryRanges(vkDevice_, 1, &range));
+      }
+    }
+    return Result();
+  }
+
+  if (!LVK_VERIFY(offset == 0 && size == tensor->dataSize_)) {
+    return Result(Result::Code::ArgumentOutOfRange, "Partial uploads are supported only for host-visible tensors");
+  }
+  if (!LVK_VERIFY(tensor->vkUsageFlags_ & VK_TENSOR_USAGE_TRANSFER_DST_BIT_ARM)) {
+    return Result(Result::Code::ArgumentOutOfRange, "Did you forget to specify TensorUsageBits_TransferDst on your tensor?");
+  }
+
+  const VkTensorDescriptionARM stagingDescription = {
+      .sType = VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+      .tiling = VK_TENSOR_TILING_LINEAR_ARM,
+      .format = tensor->vkFormat_,
+      .dimensionCount = tensor->rank_,
+      .pDimensions = tensor->dimensions_,
+      .pStrides = nullptr,
+      .usage = VK_TENSOR_USAGE_TRANSFER_SRC_BIT_ARM,
+  };
+  Result result;
+  const TensorHandle staging = createTensor(
+      stagingDescription, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, "Staging tensor", &result);
+  if (!result.isOk()) {
+    return result;
+  }
+  const Result stagingUpload = upload(staging, data, size, 0);
+  if (!stagingUpload.isOk()) {
+    destroy(staging);
+    return stagingUpload;
+  }
+
+  {
+    lvk::CommandBuffer cmd(this, *immediate_, deviceQueues_.graphicsQueueFamilyIndex);
+    cmd.cmdCopyTensor(staging, handle);
+    immediate_->submit(*cmd.wrapper_);
+  }
+  destroy(staging);
+
+  return Result();
+}
+
+lvk::Result lvk::VulkanContext::download(lvk::TensorHandle handle, void* data, size_t size, size_t offset) {
+  LVK_PROFILER_FUNCTION();
+
+  if (!LVK_VERIFY(data)) {
+    return Result(Result::Code::ArgumentOutOfRange);
+  }
+
+  lvk::VulkanTensor* tensor = tensorsPool_.get(handle);
+
+  if (!LVK_VERIFY(tensor && tensor->vkTensor_)) {
+    return Result(Result::Code::ArgumentOutOfRange);
+  }
+
+  if (!LVK_VERIFY(offset + size <= tensor->dataSize_)) {
+    return Result(Result::Code::ArgumentOutOfRange, "Out of range");
+  }
+
+  if (tensor->isMapped()) {
+    LVK_ASSERT(tensor->isLinear());
+    if (!tensor->isCoherentMemory_) {
+      if (tensor->vmaAllocation_) {
+        vmaInvalidateAllocation((VmaAllocator)getVmaAllocator(), tensor->vmaAllocation_, 0, VK_WHOLE_SIZE);
+      } else {
+        const VkMappedMemoryRange range = {
+            .sType = VK_STRUCTURE_TYPE_MAPPED_MEMORY_RANGE,
+            .memory = tensor->vkMemory_,
+            .offset = 0,
+            .size = VK_WHOLE_SIZE,
+        };
+        VK_ASSERT(vkInvalidateMappedMemoryRanges(vkDevice_, 1, &range));
+      }
+    }
+    copyTensorDataStrided(tensor->mappedPtr_, data, *tensor, offset, size, false);
+    return Result();
+  }
+
+  if (!LVK_VERIFY(tensor->vkUsageFlags_ & VK_TENSOR_USAGE_TRANSFER_SRC_BIT_ARM)) {
+    return Result(Result::Code::ArgumentOutOfRange, "Did you forget to specify TensorUsageBits_TransferSrc on your tensor?");
+  }
+
+  const VkTensorDescriptionARM stagingDescription = {
+      .sType = VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+      .tiling = VK_TENSOR_TILING_LINEAR_ARM,
+      .format = tensor->vkFormat_,
+      .dimensionCount = tensor->rank_,
+      .pDimensions = tensor->dimensions_,
+      .pStrides = nullptr,
+      .usage = VK_TENSOR_USAGE_TRANSFER_DST_BIT_ARM,
+  };
+  Result result;
+  const TensorHandle staging = createTensor(
+      stagingDescription, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, "Staging tensor", &result);
+  if (!result.isOk()) {
+    return result;
+  }
+
+  {
+    lvk::CommandBuffer cmd(this, *immediate_, deviceQueues_.graphicsQueueFamilyIndex);
+    cmd.cmdCopyTensor(handle, staging);
+    immediate_->wait(immediate_->submit(*cmd.wrapper_));
+  }
+
+  const Result stagingDownload = download(staging, data, size, offset);
+  destroy(staging);
+
+  return stagingDownload;
+}
+
+uint8_t* lvk::VulkanContext::getMappedPtr(lvk::TensorHandle handle) const {
+  const lvk::VulkanTensor* tensor = tensorsPool_.get(handle);
+
+  LVK_ASSERT(tensor);
+
+  return tensor->isMapped() ? static_cast<uint8_t*>(tensor->mappedPtr_) : nullptr;
+}
+
+lvk::TensorDesc lvk::VulkanContext::getTensorDesc(lvk::TensorHandle handle) const {
+  const lvk::VulkanTensor* tensor = tensorsPool_.get(handle);
+
+  if (!LVK_VERIFY(tensor && tensor->vkTensor_)) {
+    return {};
+  }
+
+  TensorDesc desc = {
+      .format = lvk::vkFormatToFormat(tensor->vkFormat_),
+      .rank = tensor->rank_,
+      .tiling = tensor->isLinear() ? TensorTiling_Linear : TensorTiling_Optimal,
+      .usage = vkTensorUsageToTensorUsage(tensor->vkUsageFlags_),
+      .storage = (tensor->vkMemFlags_ & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? StorageType_HostVisible : StorageType_Device,
+  };
+  for (uint32_t i = 0; i != tensor->rank_; i++) {
+    desc.dimensions[i] = tensor->dimensions_[i];
+    desc.strides[i] = tensor->strides_[i];
+  }
+  return desc;
+}
+
+lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTextureAliasingTensor(TensorHandle tensorHandle,
+                                                                                const TextureDesc& desc,
+                                                                                const char* debugName,
+                                                                                Result* outResult) {
+  const lvk::VulkanTensor* tensor = tensorsPool_.get(tensorHandle);
+
+  if (!LVK_VERIFY(tensor && tensor->vkTensor_)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Invalid tensor");
+    return {};
+  }
+  if (!LVK_VERIFY(desc.type == TextureType_2D && desc.numLayers == 1 && desc.numMipLevels == 1 && desc.numSamples <= 1)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Only single-level 2D textures can alias tensors");
+    return {};
+  }
+  if (!LVK_VERIFY(!desc.data)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "A texture aliasing a tensor cannot have initial data");
+    return {};
+  }
+  if (!LVK_VERIFY(tensor->isLinear() || (tensor->vkUsageFlags_ & VK_TENSOR_USAGE_IMAGE_ALIASING_BIT_ARM))) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Optimally tiled tensors need TensorUsageBits_ImageAliasing");
+    return {};
+  }
+  if (tensor->rank_ == 4) {
+    const uint32_t numComponents = lvk::getBytesPerPixel(lvk::formatToVkFormat(desc.format)) / tensor->elementSize_;
+    const bool isMatching = tensor->dimensions_[0] == 1 && (uint32_t)tensor->dimensions_[1] == desc.dimensions.height &&
+                            (uint32_t)tensor->dimensions_[2] == desc.dimensions.width && (uint32_t)tensor->dimensions_[3] == numComponents;
+    if (!LVK_VERIFY(isMatching)) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "The texture size and format do not match the [1, H, W, C] tensor");
+      return {};
+    }
+  }
+
+  Holder<TextureHandle> texture = createTextureImpl(desc, debugName, outResult, tensorHandle);
+
+  if (texture.valid() && tensor->isLinear() && tensor->rank_ == 4) {
+    const VkImageSubresource subresource = {.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT, .mipLevel = 0, .arrayLayer = 0};
+    VkSubresourceLayout layout = {};
+    vkGetImageSubresourceLayout(vkDevice_, texturesPool_.get(texture)->vkImage_, &subresource, &layout);
+    if (layout.rowPitch != (VkDeviceSize)tensor->strides_[1] || layout.offset) {
+      LLOGW("The linear image row pitch (%llu) does not match the tensor row stride (%lld)\n",
+            (unsigned long long)layout.rowPitch,
+            (long long)tensor->strides_[1]);
+    }
+  }
+
+  return texture;
+}
+
+void lvk::VulkanContext::transitionAliasingImageForTensorAccess(VkCommandBuffer cmdBuf,
+                                                                const VulkanTensor& tensor,
+                                                                bool computeOnlyQueue) const {
+  if (!tensor.aliasTexture_) {
+    return;
+  }
+  const VulkanImage* img = texturesPool_.get(tensor.aliasTexture_);
+  if (!img || !img->vkImage_ || !(img->vkUsageFlags_ & VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM)) {
+    return;
+  }
+  if (img->vkImageLayout_ == VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM) {
+    return;
+  }
+  img->transitionLayout(cmdBuf,
+                        VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM,
+                        VkImageSubresourceRange{img->getImageAspectFlags(), 0, VK_REMAINING_MIP_LEVELS, 0, VK_REMAINING_ARRAY_LAYERS},
+                        {},
+                        computeOnlyQueue);
+}
+
+VkDescriptorSet lvk::VulkanContext::getTensorDescriptorSet(DataGraphPipelineState& state, const ldr::Span<const TensorHandle>& tensors) {
+  const uint32_t numTensors = (uint32_t)tensors.size();
+
+  if (!LVK_VERIFY(numTensors <= LVK_MAX_DATA_GRAPH_TENSORS)) {
+    return VK_NULL_HANDLE;
+  }
+
+  for (const DataGraphPipelineState::TensorSet& set : state.tensorSets_) {
+    if (set.numTensors == numTensors && std::equal(tensors.begin(), tensors.end(), set.tensors)) {
+      return set.dset;
+    }
+  }
+
+  if (!LVK_VERIFY(state.tensorSets_.size() < LVK_MAX_DATA_GRAPH_TENSOR_SETS)) {
+    LLOGW("Data graph `%s`: dispatched with more than %u different sets of tensors (see LVK_MAX_DATA_GRAPH_TENSOR_SETS)\n",
+          state.debugName_.c_str(),
+          LVK_MAX_DATA_GRAPH_TENSOR_SETS);
+    return VK_NULL_HANDLE;
+  }
+
+  const VkDescriptorSetAllocateInfo dsai = {
+      .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO,
+      .descriptorPool = state.dpool_,
+      .descriptorSetCount = 1,
+      .pSetLayouts = &state.dsl_,
+  };
+  VkDescriptorSet dset = VK_NULL_HANDLE;
+  if (vkAllocateDescriptorSets(vkDevice_, &dsai, &dset) != VK_SUCCESS) {
+    return VK_NULL_HANDLE;
+  }
+
+  VkWriteDescriptorSetTensorARM writeTensors[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+  VkWriteDescriptorSet writes[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+  for (uint32_t i = 0; i != numTensors; i++) {
+    const VulkanTensor* tensor = tensorsPool_.get(tensors[i]);
+    writeTensors[i] = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_TENSOR_ARM,
+        .tensorViewCount = 1,
+        .pTensorViews = &tensor->vkTensorView_,
+    };
+    writes[i] = {
+        .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+        .pNext = &writeTensors[i],
+        .dstSet = dset,
+        .dstBinding = state.bindings_[i],
+        .dstArrayElement = 0,
+        .descriptorCount = 1,
+        .descriptorType = VK_DESCRIPTOR_TYPE_TENSOR_ARM,
+    };
+  }
+  if (numTensors) {
+    vkUpdateDescriptorSets(vkDevice_, numTensors, writes, 0, nullptr);
+  }
+
+  DataGraphPipelineState::TensorSet& set = state.tensorSets_.emplace_back();
+  std::copy(tensors.begin(), tensors.end(), set.tensors);
+  set.numTensors = numTensors;
+  set.dset = dset;
+
+  return dset;
+}
+
+void lvk::VulkanContext::destroyDataGraphPipelineState(DataGraphPipelineState& state) {
+  if (state.session_) {
+    deferredTask(std::packaged_task<void()>(
+        [device = vkDevice_, session = state.session_]() { vkDestroyDataGraphPipelineSessionARM(device, session, nullptr); }));
+  }
+  for (VmaAllocation allocation : state.sessionAllocations_) {
+    deferredTask(std::packaged_task<void()>([vma = getVmaAllocator(), allocation]() { vmaFreeMemory((VmaAllocator)vma, allocation); }));
+  }
+  for (VkDeviceMemory memory : state.sessionMemory_) {
+    deferredTask(std::packaged_task<void()>([device = vkDevice_, memory]() { vkFreeMemory(device, memory, nullptr); }));
+  }
+  if (state.pipeline_) {
+    deferredTask(
+        std::packaged_task<void()>([device = vkDevice_, pipeline = state.pipeline_]() { vkDestroyPipeline(device, pipeline, nullptr); }));
+  }
+  if (state.pipelineLayout_) {
+    deferredTask(std::packaged_task<void()>(
+        [device = vkDevice_, layout = state.pipelineLayout_]() { vkDestroyPipelineLayout(device, layout, nullptr); }));
+  }
+  if (state.dpool_) {
+    deferredTask(
+        std::packaged_task<void()>([device = vkDevice_, pool = state.dpool_]() { vkDestroyDescriptorPool(device, pool, nullptr); }));
+  }
+  if (state.dsl_) {
+    deferredTask(
+        std::packaged_task<void()>([device = vkDevice_, dsl = state.dsl_]() { vkDestroyDescriptorSetLayout(device, dsl, nullptr); }));
+  }
+  if (state.vkShaderModule_) {
+    deferredTask(std::packaged_task<void()>(
+        [device = vkDevice_, module = state.vkShaderModule_]() { vkDestroyShaderModule(device, module, nullptr); }));
+  }
+  state = DataGraphPipelineState{};
+}
+
+namespace {
+
+void getTensorFormatElement(VkFormat format, bool& outIsFloat, uint32_t& outBits) {
+  switch (format) {
+  case VK_FORMAT_R16_SFLOAT:
+  case VK_FORMAT_R32_SFLOAT:
+  case VK_FORMAT_R64_SFLOAT:
+    outIsFloat = true;
+    break;
+  default:
+    outIsFloat = false;
+    break;
+  }
+  outBits = lvk::getBytesPerPixel(format) * 8;
+}
+
+} // namespace
+
+lvk::Holder<lvk::DataGraphPipelineHandle> lvk::VulkanContext::createDataGraphPipeline(const DataGraphPipelineDesc& desc,
+                                                                                      Result* outResult) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_CREATE);
+
+  if (!LVK_VERIFY(has_ARM_data_graph_)) {
+    Result::setResult(outResult, Result::Code::RuntimeError, "VK_ARM_data_graph is not supported (see supportsDataGraph())");
+    return {};
+  }
+
+  const ShaderModuleState* sm = shaderModulesPool_.get(desc.smGraph);
+
+  if (!LVK_VERIFY(sm && sm->ci.pCode)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Invalid graph module");
+    return {};
+  }
+
+  if (!LVK_VERIFY(desc.inputs.size() + desc.outputs.size() <= LVK_MAX_DATA_GRAPH_TENSORS)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Too many tensors (see LVK_MAX_DATA_GRAPH_TENSORS)");
+    return {};
+  }
+
+  DataGraphPipelineState state = {
+      .entryPoint_ = desc.entryPoint ? desc.entryPoint : "main",
+      .debugName_ = desc.debugName ? desc.debugName : "",
+      .smGraph_ = desc.smGraph,
+  };
+  state.tensorDescs_.insert(state.tensorDescs_.end(), desc.inputs.begin(), desc.inputs.end());
+  state.tensorDescs_.insert(state.tensorDescs_.end(), desc.outputs.begin(), desc.outputs.end());
+  for (TensorDesc& d : state.tensorDescs_) {
+    if (!LVK_VERIFY(d.rank > 0 && d.rank <= LVK_TENSOR_MAX_RANK && d.format >= Format_R_UN8 && d.format <= Format_R_F32)) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Tensors need a positive rank and a single-channel format");
+      return {};
+    }
+    bool hasCustomStrides = false;
+    for (uint32_t i = 0; i != d.rank; i++) {
+      if (!LVK_VERIFY(d.dimensions[i] > 0)) {
+        Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Tensor dimensions must be positive");
+        return {};
+      }
+      hasCustomStrides = hasCustomStrides || d.strides[i];
+    }
+    if (d.tiling == TensorTiling_Linear && !hasCustomStrides) {
+      d.strides[d.rank - 1] = (int64_t)getTensorDataSize(TensorDesc{.format = d.format, .rank = 1, .dimensions = {1}});
+      for (uint32_t i = d.rank - 1; i != 0; i--) {
+        d.strides[i - 1] = d.strides[i] * d.dimensions[i];
+      }
+    }
+  }
+
+  auto fail = [this, &state, outResult](const char* message) -> Holder<DataGraphPipelineHandle> {
+    destroyDataGraphPipelineState(state);
+    Result::setResult(outResult, Result::Code::RuntimeError, message);
+    return {};
+  };
+
+  SpirvGraphReflection graph;
+  if (!graph.reflect(sm->ci.pCode, sm->ci.codeSize, state.entryPoint_.c_str())) {
+    LLOGW("Data graph `%s`: %s\n", state.debugName_.c_str(), graph.getError());
+    return fail("Cannot reflect the graph module");
+  }
+  if (!LVK_VERIFY(desc.inputs.size() == graph.getNumInputs() && desc.outputs.size() == graph.getNumOutputs())) {
+    LLOGW("Data graph `%s`: the module declares %u inputs and %u outputs, got %zu and %zu\n",
+          state.debugName_.c_str(),
+          graph.getNumInputs(),
+          graph.getNumOutputs(),
+          desc.inputs.size(),
+          desc.outputs.size());
+    return fail("The number of tensors does not match the graph interface");
+  }
+  std::vector<SpirvGraphReflection::Resource> resources;
+  for (uint32_t i = 0; i != graph.getNumInputs(); i++) {
+    resources.push_back(graph.getInput(i));
+  }
+  for (uint32_t i = 0; i != graph.getNumOutputs(); i++) {
+    resources.push_back(graph.getOutput(i));
+  }
+  for (size_t i = 0; i != resources.size(); i++) {
+    const SpirvGraphReflection::Resource& res = resources[i];
+    const TensorDesc& tensorDesc = state.tensorDescs_[i];
+    if (!LVK_VERIFY(tensorDesc.usage & TensorUsageBits_DataGraph)) {
+      return fail("Data graph tensors need TensorUsageBits_DataGraph");
+    }
+    if (!LVK_VERIFY(res.descriptorSet == 0)) {
+      return fail("Graph modules using descriptor sets other than 0 are not supported");
+    }
+    bool isFloat = false;
+    uint32_t elementBits = 0;
+    getTensorFormatElement(formatToVkFormat(tensorDesc.format), isFloat, elementBits);
+    const bool rankMatches = !res.rank || res.rank == tensorDesc.rank;
+    bool shapeMatches = !res.shaped || res.rank == tensorDesc.rank;
+    for (uint32_t d = 0; res.shaped && shapeMatches && d < res.rank; d++) {
+      shapeMatches = res.dimensions[d] < 0 || res.dimensions[d] == tensorDesc.dimensions[d];
+    }
+    if (!LVK_VERIFY(isFloat == res.isFloat && elementBits == res.elementBits && rankMatches && shapeMatches)) {
+      std::string shape;
+      for (uint32_t d = 0; res.shaped && d < res.rank; d++) {
+        shape += (shape.empty() ? "" : ", ") + std::to_string(res.dimensions[d]);
+      }
+      LLOGW("Data graph `%s`: %s %zu expects a %u-bit %s tensor of rank %u [%s]\n",
+            state.debugName_.c_str(),
+            i < graph.getNumInputs() ? "input" : "output",
+            i < graph.getNumInputs() ? i : i - graph.getNumInputs(),
+            res.elementBits,
+            res.isFloat ? "float" : "integer",
+            res.rank,
+            shape.c_str());
+      return fail("A tensor does not match the graph interface");
+    }
+  }
+
+  std::vector<VkDescriptorSetLayoutBinding> bindings;
+  bindings.reserve(resources.size());
+  for (const SpirvGraphReflection::Resource& res : resources) {
+    bindings.push_back(lvk::getDSLBinding(res.binding, VK_DESCRIPTOR_TYPE_TENSOR_ARM, 1, VK_SHADER_STAGE_ALL));
+    state.bindings_.push_back(res.binding);
+  }
+  {
+    const VkDescriptorSetLayoutCreateInfo dslci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        .flags = 0,
+        .bindingCount = (uint32_t)bindings.size(),
+        .pBindings = bindings.data(),
+    };
+    if (vkCreateDescriptorSetLayout(vkDevice_, &dslci, nullptr, &state.dsl_) != VK_SUCCESS) {
+      return fail("vkCreateDescriptorSetLayout() failed for the data graph module");
+    }
+    const VkPipelineLayoutCreateInfo plci = {
+        .sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO,
+        .setLayoutCount = 1,
+        .pSetLayouts = &state.dsl_,
+    };
+    if (vkCreatePipelineLayout(vkDevice_, &plci, nullptr, &state.pipelineLayout_) != VK_SUCCESS) {
+      return fail("vkCreatePipelineLayout() failed for the data graph module");
+    }
+  }
+
+  {
+    const VkResult moduleResult = vkCreateShaderModule(vkDevice_, &sm->ci, nullptr, &state.vkShaderModule_);
+    if (!LVK_VERIFY(moduleResult == VK_SUCCESS)) {
+      return fail("vkCreateShaderModule() failed for the data graph module");
+    }
+  }
+
+  std::vector<VkTensorDescriptionARM> resourceDescriptions(state.tensorDescs_.size());
+  std::vector<VkDataGraphPipelineResourceInfoARM> resourceInfos(state.tensorDescs_.size());
+  for (size_t i = 0; i != state.tensorDescs_.size(); i++) {
+    const TensorDesc& tensorDesc = state.tensorDescs_[i];
+    resourceDescriptions[i] = {
+        .sType = VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+        .tiling = tensorDesc.tiling == TensorTiling_Linear ? VK_TENSOR_TILING_LINEAR_ARM : VK_TENSOR_TILING_OPTIMAL_ARM,
+        .format = formatToVkFormat(tensorDesc.format),
+        .dimensionCount = tensorDesc.rank,
+        .pDimensions = tensorDesc.dimensions,
+        .pStrides = tensorDesc.tiling == TensorTiling_Linear ? tensorDesc.strides : nullptr,
+        .usage = tensorUsageToVkTensorUsage(tensorDesc.usage),
+    };
+    resourceInfos[i] = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_RESOURCE_INFO_ARM,
+        .pNext = &resourceDescriptions[i],
+        .descriptorSet = resources[i].descriptorSet,
+        .binding = resources[i].binding,
+        .arrayElement = 0,
+    };
+  }
+  std::vector<VkTensorDescriptionARM> constantDescriptions(desc.constants.size());
+  std::vector<VkDataGraphPipelineConstantARM> constants(desc.constants.size());
+  for (size_t i = 0; i != desc.constants.size(); i++) {
+    const DataGraphConstant& c = desc.constants[i];
+    const VkFormat vkFormat = lvk::formatToVkFormat(c.format);
+    if (!LVK_VERIFY(c.data && c.rank > 0 && c.rank <= LVK_TENSOR_MAX_RANK && vkFormat != VK_FORMAT_UNDEFINED)) {
+      return fail("Invalid data graph constant");
+    }
+    constantDescriptions[i] = {
+        .sType = VK_STRUCTURE_TYPE_TENSOR_DESCRIPTION_ARM,
+        .tiling = VK_TENSOR_TILING_LINEAR_ARM,
+        .format = vkFormat,
+        .dimensionCount = c.rank,
+        .pDimensions = c.dimensions,
+        .pStrides = nullptr,
+        .usage = VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM,
+    };
+    constants[i] = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_CONSTANT_ARM,
+        .pNext = &constantDescriptions[i],
+        .id = c.id,
+        .pConstantData = c.data,
+    };
+  }
+  {
+    const VkDataGraphPipelineShaderModuleCreateInfoARM smci = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SHADER_MODULE_CREATE_INFO_ARM,
+        .module = state.vkShaderModule_,
+        .pName = state.entryPoint_.c_str(),
+        .pSpecializationInfo = nullptr,
+        .constantCount = (uint32_t)constants.size(),
+        .pConstants = constants.data(),
+    };
+    const VkDataGraphPipelineCreateInfoARM ci = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_CREATE_INFO_ARM,
+        .pNext = &smci,
+        .flags = 0,
+        .layout = state.pipelineLayout_,
+        .resourceInfoCount = (uint32_t)resourceInfos.size(),
+        .pResourceInfos = resourceInfos.data(),
+    };
+    const VkResult pipelineResult =
+        vkCreateDataGraphPipelinesARM(vkDevice_, VK_NULL_HANDLE, pipelineCache_, 1, &ci, nullptr, &state.pipeline_);
+    if (!LVK_VERIFY(pipelineResult == VK_SUCCESS)) {
+      return fail("vkCreateDataGraphPipelinesARM() failed");
+    }
+    if (!config_.enableMLEmulationLayer) {
+      VK_ASSERT(lvk::setDebugObjectName(vkDevice_, VK_OBJECT_TYPE_PIPELINE, (uint64_t)state.pipeline_, state.debugName_.c_str()));
+    }
+  }
+
+  {
+    const VkDataGraphPipelineSessionCreateInfoARM sci = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_CREATE_INFO_ARM,
+        .flags = 0,
+        .dataGraphPipeline = state.pipeline_,
+    };
+    const VkResult sessionResult = vkCreateDataGraphPipelineSessionARM(vkDevice_, &sci, nullptr, &state.session_);
+    if (!LVK_VERIFY(sessionResult == VK_SUCCESS)) {
+      return fail("vkCreateDataGraphPipelineSessionARM() failed");
+    }
+    const VkDataGraphPipelineSessionBindPointRequirementsInfoARM bpri = {
+        .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_REQUIREMENTS_INFO_ARM,
+        .session = state.session_,
+    };
+    uint32_t numRequirements = 0;
+    VK_ASSERT(vkGetDataGraphPipelineSessionBindPointRequirementsARM(vkDevice_, &bpri, &numRequirements, nullptr));
+    std::vector<VkDataGraphPipelineSessionBindPointRequirementARM> requirements(
+        numRequirements, {.sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_REQUIREMENT_ARM});
+    VK_ASSERT(vkGetDataGraphPipelineSessionBindPointRequirementsARM(vkDevice_, &bpri, &numRequirements, requirements.data()));
+
+    for (const VkDataGraphPipelineSessionBindPointRequirementARM& req : requirements) {
+      if (req.bindPointType != VK_DATA_GRAPH_PIPELINE_SESSION_BIND_POINT_TYPE_MEMORY_ARM) {
+        continue;
+      }
+      for (uint32_t objectIndex = 0; objectIndex != req.numObjects; objectIndex++) {
+        const VkDataGraphPipelineSessionMemoryRequirementsInfoARM mri = {
+            .sType = VK_STRUCTURE_TYPE_DATA_GRAPH_PIPELINE_SESSION_MEMORY_REQUIREMENTS_INFO_ARM,
+            .session = state.session_,
+            .bindPoint = req.bindPoint,
+            .objectIndex = objectIndex,
+        };
+        VkMemoryRequirements2 memRequirements = {.sType = VK_STRUCTURE_TYPE_MEMORY_REQUIREMENTS_2};
+        vkGetDataGraphPipelineSessionMemoryRequirementsARM(vkDevice_, &mri, &memRequirements);
+        if (!memRequirements.memoryRequirements.size) {
+          continue;
+        }
+        VkDeviceMemory memory = VK_NULL_HANDLE;
+        VkDeviceSize memoryOffset = 0;
+        if (LVK_VULKAN_USE_VMA) {
+          const VmaAllocationCreateInfo vmaAllocInfo = {
+              .usage = VMA_MEMORY_USAGE_UNKNOWN,
+              .requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
+          };
+          VmaAllocation allocation = VK_NULL_HANDLE;
+          VmaAllocationInfo allocInfo = {};
+          const VkResult allocResult = vmaAllocateMemory(
+              (VmaAllocator)getVmaAllocator(), &memRequirements.memoryRequirements, &vmaAllocInfo, &allocation, &allocInfo);
+          if (!LVK_VERIFY(allocResult == VK_SUCCESS)) {
+            return fail("Cannot allocate data graph session memory");
+          }
+          state.sessionAllocations_.push_back(allocation);
+          memory = allocInfo.deviceMemory;
+          memoryOffset = allocInfo.offset;
+        } else {
+          const VkResult allocResult =
+              lvk::allocateMemory2(vkPhysicalDevice_, vkDevice_, &memRequirements, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, &memory);
+          if (!LVK_VERIFY(allocResult == VK_SUCCESS)) {
+            return fail("Cannot allocate data graph session memory");
+          }
+          state.sessionMemory_.push_back(memory);
+        }
+        const VkBindDataGraphPipelineSessionMemoryInfoARM bindInfo = {
+            .sType = VK_STRUCTURE_TYPE_BIND_DATA_GRAPH_PIPELINE_SESSION_MEMORY_INFO_ARM,
+            .session = state.session_,
+            .bindPoint = req.bindPoint,
+            .objectIndex = objectIndex,
+            .memory = memory,
+            .memoryOffset = memoryOffset,
+        };
+        if (vkBindDataGraphPipelineSessionMemoryARM(vkDevice_, 1, &bindInfo) != VK_SUCCESS) {
+          return fail("Cannot bind data graph session memory");
+        }
+      }
+    }
+  }
+
+  {
+    const VkDescriptorPoolSize poolSize = {VK_DESCRIPTOR_TYPE_TENSOR_ARM,
+                                           LVK_MAX_DATA_GRAPH_TENSOR_SETS * std::max(1u, (uint32_t)state.tensorDescs_.size())};
+    const VkDescriptorPoolCreateInfo dpci = {
+        .sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO,
+        .flags = 0,
+        .maxSets = LVK_MAX_DATA_GRAPH_TENSOR_SETS,
+        .poolSizeCount = 1,
+        .pPoolSizes = &poolSize,
+    };
+    if (vkCreateDescriptorPool(vkDevice_, &dpci, nullptr, &state.dpool_) != VK_SUCCESS) {
+      return fail("Cannot create the data graph descriptor pool");
+    }
+  }
+
+  Result::setResult(outResult, Result());
+
+  return {this, dataGraphPipelinesPool_.create(std::move(state))};
+}
+
+void lvk::VulkanContext::destroy(lvk::DataGraphPipelineHandle handle) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_DESTROY);
+
+  DataGraphPipelineState* state = dataGraphPipelinesPool_.get(handle);
+
+  if (!state) {
+    return;
+  }
+
+  destroyDataGraphPipelineState(*state);
+
+  dataGraphPipelinesPool_.destroy(handle);
+}
+
+void lvk::CommandBuffer::tensorBarrier(TensorHandle handle, VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage) {
+  LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_BARRIER);
+
+  const lvk::VulkanTensor* tensor = ctx_->tensorsPool_.get(handle);
+
+  if (!LVK_VERIFY(tensor && tensor->vkTensor_)) {
+    return;
+  }
+
+  const bool computeOnlyQueue = isComputeOnlyQueue();
+  srcStage = stripGraphicsStages(srcStage, computeOnlyQueue);
+  dstStage = stripGraphicsStages(dstStage, computeOnlyQueue);
+
+  if (!ctx_->has_ARM_data_graph_ || computeOnlyQueue) {
+    srcStage &= ~VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+    dstStage &= ~VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+  }
+
+  const VkTensorMemoryBarrierARM barrier = {
+      .sType = VK_STRUCTURE_TYPE_TENSOR_MEMORY_BARRIER_ARM,
+      .srcStageMask = srcStage,
+      .srcAccessMask = tensorAccessFlagsForStages(srcStage),
+      .dstStageMask = dstStage,
+      .dstAccessMask = tensorAccessFlagsForStages(dstStage),
+      .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+      .tensor = tensor->vkTensor_,
+  };
+  const VkTensorDependencyInfoARM tensorDependencyInfo = {
+      .sType = VK_STRUCTURE_TYPE_TENSOR_DEPENDENCY_INFO_ARM,
+      .tensorMemoryBarrierCount = 1,
+      .pTensorMemoryBarriers = &barrier,
+  };
+  const VkDependencyInfo dependencyInfo = {
+      .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
+      .pNext = &tensorDependencyInfo,
+  };
+  vkCmdPipelineBarrier2(wrapper_->cmdBuf_, &dependencyInfo);
+
+  ctx_->transitionAliasingImageForTensorAccess(wrapper_->cmdBuf_, *tensor, computeOnlyQueue);
+}
+
+void lvk::CommandBuffer::tensorBarriers(const ldr::Span<TensorHandle>& tensors,
+                                        VkPipelineStageFlags2 srcStage,
+                                        VkPipelineStageFlags2 dstStage) {
+  for (size_t i = 0; i != tensors.size(); i++) {
+    tensorBarrier(tensors[i], srcStage, dstStage);
+  }
+}
+
+void lvk::CommandBuffer::cmdCopyTensor(TensorHandle src, TensorHandle dst) {
+  LVK_PROFILER_FUNCTION();
+
+  const lvk::VulkanTensor* srcTensor = ctx_->tensorsPool_.get(src);
+  const lvk::VulkanTensor* dstTensor = ctx_->tensorsPool_.get(dst);
+
+  if (!LVK_VERIFY(srcTensor && srcTensor->vkTensor_ && dstTensor && dstTensor->vkTensor_)) {
+    return;
+  }
+  LVK_ASSERT_MSG(srcTensor->vkUsageFlags_ & VK_TENSOR_USAGE_TRANSFER_SRC_BIT_ARM, "The source tensor needs TensorUsageBits_TransferSrc");
+  LVK_ASSERT_MSG(dstTensor->vkUsageFlags_ & VK_TENSOR_USAGE_TRANSFER_DST_BIT_ARM,
+                 "The destination tensor needs TensorUsageBits_TransferDst");
+  if (!LVK_VERIFY(srcTensor->rank_ == dstTensor->rank_ && srcTensor->vkFormat_ == dstTensor->vkFormat_)) {
+    return;
+  }
+  uint64_t offsets[LVK_TENSOR_MAX_RANK] = {};
+  uint64_t extent[LVK_TENSOR_MAX_RANK] = {};
+  for (uint32_t i = 0; i != srcTensor->rank_; i++) {
+    if (!LVK_VERIFY(srcTensor->dimensions_[i] == dstTensor->dimensions_[i])) {
+      return;
+    }
+    extent[i] = (uint64_t)srcTensor->dimensions_[i];
+  }
+
+  tensorBarrier(src, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+  tensorBarrier(dst, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
+
+  const VkTensorCopyARM region = {
+      .sType = VK_STRUCTURE_TYPE_TENSOR_COPY_ARM,
+      .dimensionCount = srcTensor->rank_,
+      .pSrcOffset = offsets,
+      .pDstOffset = offsets,
+      .pExtent = extent,
+  };
+  const VkCopyTensorInfoARM copyInfo = {
+      .sType = VK_STRUCTURE_TYPE_COPY_TENSOR_INFO_ARM,
+      .srcTensor = srcTensor->vkTensor_,
+      .dstTensor = dstTensor->vkTensor_,
+      .regionCount = 1,
+      .pRegions = &region,
+  };
+  vkCmdCopyTensorARM(wrapper_->cmdBuf_, &copyInfo);
+
+  tensorBarrier(src, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+  tensorBarrier(dst, VK_PIPELINE_STAGE_2_TRANSFER_BIT, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
+}
+
+void lvk::CommandBuffer::cmdDispatchDataGraph(DataGraphPipelineHandle handle,
+                                              const ldr::Span<const TensorHandle>& inputs,
+                                              const ldr::Span<const TensorHandle>& outputs,
+                                              const Dependencies& deps) {
+  LVK_PROFILER_FUNCTION();
+  LVK_PROFILER_GPU_ZONE("cmdDispatchDataGraph()", ctx_, wrapper_->cmdBuf_, LVK_PROFILER_COLOR_CMD_DISPATCH);
+
+  LVK_ASSERT(!isRendering_);
+
+  DataGraphPipelineState* state = ctx_->dataGraphPipelinesPool_.get(handle);
+
+  if (!LVK_VERIFY(state && state->pipeline_ && state->session_)) {
+    return;
+  }
+  LVK_ASSERT_MSG(!isComputeOnlyQueue(), "Data graphs are dispatched on the graphics queue");
+
+  TensorHandle tensors[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+  const size_t numTensors = inputs.size() + outputs.size();
+  if (!LVK_VERIFY(numTensors == state->tensorDescs_.size() && numTensors <= LVK_MAX_DATA_GRAPH_TENSORS)) {
+    return;
+  }
+  std::copy(inputs.begin(), inputs.end(), tensors);
+  std::copy(outputs.begin(), outputs.end(), tensors + inputs.size());
+
+  for (size_t i = 0; i != numTensors; i++) {
+    const VulkanTensor* tensor = ctx_->tensorsPool_.get(tensors[i]);
+    if (!LVK_VERIFY(tensor && tensor->vkTensorView_)) {
+      return;
+    }
+    const TensorDesc& d = state->tensorDescs_[i];
+    bool matches = tensor->vkFormat_ == formatToVkFormat(d.format) && tensor->rank_ == d.rank &&
+                   tensor->isLinear() == (d.tiling == TensorTiling_Linear) && (tensor->vkUsageFlags_ & VK_TENSOR_USAGE_DATA_GRAPH_BIT_ARM);
+    for (uint32_t k = 0; matches && k != d.rank; k++) {
+      matches = tensor->dimensions_[k] == d.dimensions[k] && (!tensor->isLinear() || tensor->strides_[k] == d.strides[k]);
+    }
+    if (!LVK_VERIFY(matches)) {
+      LLOGW("Data graph `%s`: tensor %zu does not match the description the pipeline was created with\n", state->debugName_.c_str(), i);
+      return;
+    }
+  }
+
+  const VkDescriptorSet dset = ctx_->getTensorDescriptorSet(*state, {tensors, numTensors});
+  if (!LVK_VERIFY(dset)) {
+    return;
+  }
+
+  addCrossQueueDependencies(deps);
+
+  const VkPipelineStageFlags2 srcStages = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT |
+                                          VK_PIPELINE_STAGE_2_TRANSFER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+                                          VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM;
+  for (size_t i = 0; i != numTensors; i++) {
+    tensorBarrier(tensors[i], srcStages, VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM);
+  }
+  for (const TensorHandle tensor : deps.tensors) {
+    if (std::find(tensors, tensors + numTensors, tensor) == tensors + numTensors) {
+      tensorBarrier(tensor, srcStages, VK_PIPELINE_STAGE_2_DATA_GRAPH_BIT_ARM);
+    }
+  }
+
+  vkCmdBindPipeline(wrapper_->cmdBuf_, VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM, state->pipeline_);
+  vkCmdBindDescriptorSets(wrapper_->cmdBuf_, VK_PIPELINE_BIND_POINT_DATA_GRAPH_ARM, state->pipelineLayout_, 0, 1, &dset, 0, nullptr);
+  vkCmdDispatchDataGraphARM(wrapper_->cmdBuf_, state->session_, nullptr);
+
+  lastPipelineBound_ = VK_NULL_HANDLE;
 }

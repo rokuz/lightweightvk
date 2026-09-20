@@ -520,6 +520,33 @@ lvk::Format lvk::vkFormatToFormat(VkFormat format) {
   return Format_Invalid;
 }
 
+lvk::Format lvk::vkFormatToTensorFormat(VkFormat format) {
+  switch (format) {
+  case VK_FORMAT_R8_UNORM:
+    return Format_R_UN8;
+  case VK_FORMAT_R8_UINT:
+    return Format_R_UI8;
+  case VK_FORMAT_R8_SINT:
+    return Format_R_I8;
+  case VK_FORMAT_R16_UNORM:
+    return Format_R_UN16;
+  case VK_FORMAT_R16_SFLOAT:
+    return Format_R_F16;
+  case VK_FORMAT_R16_UINT:
+    return Format_R_UI16;
+  case VK_FORMAT_R16_SINT:
+    return Format_R_I16;
+  case VK_FORMAT_R32_UINT:
+    return Format_R_UI32;
+  case VK_FORMAT_R32_SINT:
+    return Format_R_I32;
+  case VK_FORMAT_R32_SFLOAT:
+    return Format_R_F32;
+  default:
+    return Format_Invalid;
+  }
+}
+
 VkSemaphore lvk::createSemaphore(VkDevice device, const char* debugName) {
   const VkSemaphoreCreateInfo ci = {
       .sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO,
@@ -925,7 +952,8 @@ lvk::Result lvk::compileShaderGlslang(lvk::ShaderStage stage,
                                       const char* code,
                                       std::vector<uint8_t>* outSPIRV,
                                       bool generateDebugInfo,
-                                      const glslang_resource_t* glslLangResource) {
+                                      const glslang_resource_t* glslLangResource,
+                                      bool optimize) {
   LVK_PROFILER_FUNCTION();
 
   if (!outSPIRV) {
@@ -989,8 +1017,8 @@ lvk::Result lvk::compileShaderGlslang(lvk::ShaderStage stage,
   glslang_spv_options_t options = {
       .generate_debug_info = generateDebugInfo,
       .strip_debug_info = !generateDebugInfo,
-      .disable_optimizer = false,
-      .optimize_size = true,
+      .disable_optimizer = !optimize,
+      .optimize_size = optimize,
       .disassemble = false,
       .validate = true,
       .emit_nonsemantic_shader_debug_info = false,
@@ -1146,6 +1174,8 @@ lvk::Result lvk::compileShaderSlang(slang::IGlobalSession*& slangGlobalSession,
       return "intersectionMain";
     case Stage_Callable:
       return "callableMain";
+    case Stage_DataGraph:
+      return "graphMain";
     }
     return "unknown shader type";
   }();
@@ -1205,8 +1235,14 @@ void lvk::destroySlangGlobalSession(slang::IGlobalSession* slangGlobalSession) {
 #endif // defined(LVK_WITH_SLANG) && LVK_WITH_SLANG
 }
 
+static bool g_debugObjectNamesEnabled = true;
+
+void lvk::enableDebugObjectNames(bool enable) {
+  g_debugObjectNamesEnabled = enable;
+}
+
 VkResult lvk::setDebugObjectName(VkDevice device, VkObjectType type, uint64_t handle, const char* name) {
-  if (!name || !*name || !vkSetDebugUtilsObjectNameEXT) {
+  if (!name || !*name || !vkSetDebugUtilsObjectNameEXT || !g_debugObjectNamesEnabled) {
     return VK_SUCCESS;
   }
   const VkDebugUtilsObjectNameInfoEXT ni = {
@@ -1297,11 +1333,13 @@ VkResult lvk::allocateMemory2(VkPhysicalDevice physDev,
                               const VkMemoryRequirements2* memRequirements,
                               VkMemoryPropertyFlags props,
                               VkDeviceMemory* outMemory,
-                              VkMemoryPropertyFlags* outMemoryProperties) {
+                              VkMemoryPropertyFlags* outMemoryProperties,
+                              const void* pNext) {
   assert(memRequirements);
 
   const VkMemoryAllocateFlagsInfo memoryAllocateFlagsInfo = {
       .sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_FLAGS_INFO,
+      .pNext = pNext,
       .flags = VK_MEMORY_ALLOCATE_DEVICE_ADDRESS_BIT_KHR,
   };
   const VkMemoryAllocateInfo ai = {
@@ -1575,6 +1613,11 @@ StageAccess lvk::getPipelineStageAccess(VkImageLayout layout) {
     return {
         .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR,
         .access = VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR,
+    };
+  case VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM:
+    return {
+        .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        .access = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
     };
   default:
     LVK_ASSERT_MSG(false, "Unsupported image layout transition!");

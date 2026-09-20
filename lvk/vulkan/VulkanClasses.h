@@ -14,6 +14,7 @@
 
 #include <future>
 #include <memory>
+#include <string>
 #include <vector>
 
 namespace lvk {
@@ -403,6 +404,56 @@ struct AccelerationStructure {
   VkAccelerationStructureGeometryKHR geometry = {};
 };
 
+struct VulkanTensor final {
+  // clang-format off
+  [[nodiscard]] inline bool isMapped() const { return mappedPtr_ != nullptr; }
+  [[nodiscard]] inline bool isLinear() const { return vkTiling_ == VK_TENSOR_TILING_LINEAR_ARM; }
+  [[nodiscard]] inline bool isShaderTensor() const { return (vkUsageFlags_ & VK_TENSOR_USAGE_SHADER_BIT_ARM) > 0; }
+  // clang-format on
+
+  VkTensorARM vkTensor_ = VK_NULL_HANDLE;
+  VkTensorViewARM vkTensorView_ = VK_NULL_HANDLE;
+  VkDeviceMemory vkMemory_ = VK_NULL_HANDLE;
+  VkDeviceSize vkMemoryOffset_ = 0;
+  VkDeviceSize vkMemorySize_ = 0;
+  VmaAllocation vmaAllocation_ = VK_NULL_HANDLE;
+  VkFormat vkFormat_ = VK_FORMAT_UNDEFINED;
+  VkTensorTilingARM vkTiling_ = VK_TENSOR_TILING_OPTIMAL_ARM;
+  VkTensorUsageFlagsARM vkUsageFlags_ = 0;
+  VkMemoryPropertyFlags vkMemFlags_ = 0;
+  uint32_t rank_ = 0;
+  int64_t dimensions_[LVK_TENSOR_MAX_RANK] = {};
+  int64_t strides_[LVK_TENSOR_MAX_RANK] = {};
+  uint64_t dataSize_ = 0;
+  uint32_t elementSize_ = 0;
+  uint32_t vkMemoryTypeIndex_ = 0;
+  void* mappedPtr_ = nullptr;
+  bool isCoherentMemory_ = false;
+  TextureHandle aliasTexture_;
+};
+
+struct DataGraphPipelineState final {
+  std::string entryPoint_ = "main";
+  std::string debugName_;
+  ShaderModuleHandle smGraph_;
+  std::vector<TensorDesc> tensorDescs_;
+  std::vector<uint32_t> bindings_;
+  struct TensorSet final {
+    TensorHandle tensors[LVK_MAX_DATA_GRAPH_TENSORS] = {};
+    uint32_t numTensors = 0;
+    VkDescriptorSet dset = VK_NULL_HANDLE;
+  };
+  std::vector<TensorSet> tensorSets_;
+  VkDescriptorSetLayout dsl_ = VK_NULL_HANDLE;
+  VkDescriptorPool dpool_ = VK_NULL_HANDLE;
+  VkPipelineLayout pipelineLayout_ = VK_NULL_HANDLE;
+  VkShaderModule vkShaderModule_ = VK_NULL_HANDLE;
+  VkPipeline pipeline_ = VK_NULL_HANDLE;
+  VkDataGraphPipelineSessionARM session_ = VK_NULL_HANDLE;
+  std::vector<VkDeviceMemory> sessionMemory_;
+  std::vector<VmaAllocation> sessionAllocations_;
+};
+
 class CommandBuffer final : public ICommandBuffer {
  public:
   CommandBuffer() = default;
@@ -492,6 +543,11 @@ class CommandBuffer final : public ICommandBuffer {
   void cmdGenerateMipmap(TextureHandle handle) override;
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
   void cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) override;
+  void cmdCopyTensor(TensorHandle src, TensorHandle dst) override;
+  void cmdDispatchDataGraph(DataGraphPipelineHandle handle,
+                            const ldr::Span<const TensorHandle>& inputs,
+                            const ldr::Span<const TensorHandle>& outputs,
+                            const Dependencies& deps) override;
 
   operator VkCommandBuffer() const
 #if defined(LVK_WITH_RAW_VULKAN)
@@ -515,6 +571,8 @@ class CommandBuffer final : public ICommandBuffer {
                      VkPipelineStageFlags2 dstStage,
                      VkDeviceSize offset = 0,
                      VkDeviceSize size = VK_WHOLE_SIZE);
+  void tensorBarrier(TensorHandle handle, VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage);
+  void tensorBarriers(const ldr::Span<TensorHandle>& tensors, VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage);
 
   void addCrossQueueDependencies(const Dependencies& deps);
   // Completes a cross-queue ownership transfer for `img` if the producing queue armed one; returns true if an acquire was emitted
@@ -631,6 +689,8 @@ class VulkanContext final : public IContext {
   Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult) override;
 
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult) override;
+  Holder<TensorHandle> createTensor(const TensorDesc& desc, const char* debugName, Result* outResult) override;
+  Holder<DataGraphPipelineHandle> createDataGraphPipeline(const DataGraphPipelineDesc& desc, Result* outResult) override;
 
   void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
@@ -641,6 +701,8 @@ class VulkanContext final : public IContext {
   void destroy(TextureHandle handle) override;
   void destroy(QueryPoolHandle handle) override;
   void destroy(AccelStructHandle handle) override;
+  void destroy(TensorHandle handle) override;
+  void destroy(DataGraphPipelineHandle handle) override;
   void destroy(Framebuffer& fb) override;
 
   uint64_t gpuAddress(AccelStructHandle handle) const override;
@@ -654,6 +716,14 @@ class VulkanContext final : public IContext {
 
   Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override;
   Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) override;
+  Holder<TextureHandle> createTextureAliasingTensor(TensorHandle tensor,
+                                                    const TextureDesc& desc,
+                                                    const char* debugName,
+                                                    Result* outResult) override;
+  Result upload(TensorHandle handle, const void* data, size_t size, size_t offset) override;
+  Result download(TensorHandle handle, void* data, size_t size, size_t offset) override;
+  uint8_t* getMappedPtr(TensorHandle handle) const override;
+  TensorDesc getTensorDesc(TensorHandle handle) const override;
   Dimensions getDimensions(TextureHandle handle) const override;
   float getAspectRatio(TextureHandle handle) const override;
   Format getFormat(TextureHandle handle) const override;
@@ -704,6 +774,14 @@ class VulkanContext final : public IContext {
                ? vkMeshShaderProperties_.maxMeshMultiviewViewCount
                : 1u;
   }
+  bool supportsTensors() const override {
+    return has_ARM_tensors_;
+  }
+  bool supportsDataGraph() const override {
+    return has_ARM_data_graph_;
+  }
+  [[nodiscard]] TensorProperties getTensorProperties() const override;
+  [[nodiscard]] uint8_t getTensorFormatSupport(Format format, TensorTiling tiling) const override;
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
@@ -776,6 +854,7 @@ class VulkanContext final : public IContext {
   [[nodiscard]] bool writeSamplerDescriptor(uint32_t index);
   [[nodiscard]] bool writeAccelStructDescriptor(uint32_t index);
   void bindDefaultDescriptorSets(VkCommandBuffer cmdBuf, VkPipelineBindPoint bindPoint, VkPipelineLayout layout) const;
+  void transitionAliasingImageForTensorAccess(VkCommandBuffer cmdBuf, const VulkanTensor& tensor, bool computeOnlyQueue) const;
 
   [[nodiscard]] uint32_t getMaxStorageBufferRange() const override;
 
@@ -784,6 +863,7 @@ class VulkanContext final : public IContext {
     uint32_t maxTextures = 0;
     uint32_t maxSamplers = 0;
     uint32_t maxAccelStructs = 0;
+    uint32_t maxTensors = 0;
     VkDescriptorSetLayout vkDSL = VK_NULL_HANDLE;
     VkDescriptorPool vkDPool = VK_NULL_HANDLE;
     VkDescriptorSet vkDSet = VK_NULL_HANDLE;
@@ -791,14 +871,30 @@ class VulkanContext final : public IContext {
   };
 
   lvk::Result createInstance();
+  [[nodiscard]] bool hasNativeTensorSupport() const;
   void createSurface(void* window, void* display);
   void createHeadlessSurface();
   void querySurfaceCapabilities();
   void processDeferredTasks() const;
   void waitDeferredTasks();
   void generateMipmap(TextureHandle handle) const;
-  lvk::Result growDescriptorPool(VulkanContext::DescriptorSet& dset, uint32_t maxTextures, uint32_t maxSamplers, uint32_t maxAccelStructs);
-  ShaderModuleState createShaderModuleFromSPIRV(const void* spirv, size_t numBytes, const char* debugName, Result* outResult) const;
+  lvk::Result growDescriptorPool(VulkanContext::DescriptorSet& dset,
+                                 uint32_t maxTextures,
+                                 uint32_t maxSamplers,
+                                 uint32_t maxAccelStructs,
+                                 uint32_t maxTensors);
+  TensorHandle createTensor(const VkTensorDescriptionARM& description,
+                            VkMemoryPropertyFlags memFlags,
+                            const char* debugName,
+                            Result* outResult);
+  VkDescriptorSet getTensorDescriptorSet(DataGraphPipelineState& state, const ldr::Span<const TensorHandle>& tensors);
+  void destroyDataGraphPipelineState(DataGraphPipelineState& state);
+  ShaderModuleState createShaderModuleFromSPIRV(const void* spirv,
+                                                size_t numBytes,
+                                                const char* debugName,
+                                                Result* outResult,
+                                                bool reflect = true) const;
+  Holder<TextureHandle> createTextureImpl(const TextureDesc& desc, const char* debugName, Result* outResult, TensorHandle aliasTensor);
   ShaderModuleState createShaderModuleFromGLSL(ShaderStage stage,
                                                const char* source,
                                                bool optimizeSPIRV,
@@ -827,6 +923,7 @@ class VulkanContext final : public IContext {
  private:
   friend class lvk::VulkanSwapchain;
   friend class lvk::VulkanStagingDevice;
+  friend class lvk::CommandBuffer;
 
   VkInstance vkInstance_ = VK_NULL_HANDLE;
   VkDebugUtilsMessengerEXT vkDebugUtilsMessenger_ = VK_NULL_HANDLE;
@@ -889,6 +986,7 @@ class VulkanContext final : public IContext {
   };
   VkPhysicalDeviceFragmentShadingRatePropertiesKHR vkFragmentShadingRateProperties_ = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
+  VkPhysicalDeviceTensorPropertiesARM vkTensorProperties_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_PROPERTIES_ARM};
 
   std::vector<VkFormat> deviceDepthFormats_;
   std::vector<VkSurfaceFormat2KHR> deviceSurfaceFormats_;
@@ -936,6 +1034,7 @@ class VulkanContext final : public IContext {
   bool has_EXT_shader_tile_image = false;
   bool has_EXT_mesh_shader_ = false;
   bool has_EXT_provoking_vertex_ = false;
+  bool has_EXT_shader_replicated_composites_ = false;
   bool has_EXT_fragment_shader_interlock_ = false;
   bool has_MVK_macos_surface_ = false;
   bool has_KHR_shared_presentable_image_ = false;
@@ -948,6 +1047,8 @@ class VulkanContext final : public IContext {
   bool has_EXT_dynamic_rendering_unused_attachments_ = false;
   bool has_ARM_tensors_ = false;
   bool has_ARM_data_graph_ = false;
+  VkShaderStageFlags tensorShaderStages_ = 0;
+  uint32_t maxBindlessTensors_ = 0;
   // VK_EXT_host_image_copy
   bool hostImageCopyToShaderReadOnly_ = false; // SHADER_READ_ONLY_OPTIMAL is a usable copy destination
   bool hostImageCopyToGeneral_ = false; // GENERAL is a usable copy destination (for images which cannot be sampled)
@@ -961,6 +1062,7 @@ class VulkanContext final : public IContext {
   // BLAS and empty slots of `kBinding_AccelerationStructures` need a valid TLAS too
   BufferHandle dummyTLASBuffer_;
   VkAccelerationStructureKHR dummyTLAS_ = VK_NULL_HANDLE;
+  TensorHandle dummyTensor_;
 
   ldr::Pool<lvk::ShaderModule, lvk::ShaderModuleState> shaderModulesPool_;
   ldr::Pool<lvk::RenderPipeline, lvk::RenderPipelineState> renderPipelinesPool_;
@@ -971,6 +1073,8 @@ class VulkanContext final : public IContext {
   ldr::Pool<lvk::Texture, lvk::VulkanImage> texturesPool_;
   ldr::Pool<lvk::QueryPool, VkQueryPool> queriesPool_;
   ldr::Pool<lvk::AccelerationStructure, lvk::AccelerationStructure> accelStructuresPool_;
+  ldr::Pool<lvk::Tensor, lvk::VulkanTensor> tensorsPool_;
+  ldr::Pool<lvk::DataGraphPipeline, lvk::DataGraphPipelineState> dataGraphPipelinesPool_;
 };
 
 } // namespace lvk

@@ -85,12 +85,14 @@ VkFence createFence(VkDevice device, const char* debugName, bool isSignaled = fa
 VmaAllocator createVmaAllocator(VkPhysicalDevice physDev, VkDevice device, VkInstance instance, uint32_t apiVersion);
 uint32_t findQueueFamilyIndex(VkPhysicalDevice physDev, VkQueueFlags flags);
 VkResult setDebugObjectName(VkDevice device, VkObjectType type, uint64_t handle, const char* name);
+void enableDebugObjectNames(bool enable);
 VkResult allocateMemory2(VkPhysicalDevice physDev,
                          VkDevice device,
                          const VkMemoryRequirements2* memRequirements,
                          VkMemoryPropertyFlags props,
                          VkDeviceMemory* outMemory,
-                         VkMemoryPropertyFlags* outMemoryProperties = nullptr);
+                         VkMemoryPropertyFlags* outMemoryProperties = nullptr,
+                         const void* pNext = nullptr);
 
 glslang_resource_t getGlslangResource(const VkPhysicalDeviceLimits& limits,
                                       const VkPhysicalDeviceMeshShaderPropertiesEXT* meshShader = nullptr);
@@ -98,7 +100,8 @@ Result compileShaderGlslang(lvk::ShaderStage stage,
                             const char* code,
                             std::vector<uint8_t>* outSPIRV,
                             bool generateDebugInfo,
-                            const glslang_resource_t* glslLangResource = nullptr);
+                            const glslang_resource_t* glslLangResource = nullptr,
+                            bool optimize = true);
 Result compileShaderSlang(slang::IGlobalSession*& slangGlobalSession,
                           lvk::ShaderStage stage,
                           const char* code,
@@ -139,6 +142,7 @@ const char* getVkDeviceFaultAddressTypeString(VkDeviceFaultAddressTypeEXT type);
 uint32_t getBytesPerPixel(VkFormat format);
 uint32_t getNumImagePlanes(VkFormat format);
 lvk::Format vkFormatToFormat(VkFormat format);
+lvk::Format vkFormatToTensorFormat(VkFormat format);
 lvk::ColorSpace vkColorSpaceToColorSpace(VkColorSpaceKHR colorSpace);
 lvk::PresentMode vkPresentModeToPresentMode(VkPresentModeKHR mode);
 VkPresentModeKHR presentModeToVkPresentMode(lvk::PresentMode mode);
