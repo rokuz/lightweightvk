@@ -15,6 +15,10 @@ if(APPLE)
   file(GLOB SRC_FILES_MM LIST_DIRECTORIES false RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} *.mm)
   list(APPEND SRC_FILES ${SRC_FILES_MM})
 endif()
+if(NOT LVK_WITH_TENSORS)
+  list(REMOVE_ITEM SRC_FILES HelpersVgf.cpp)
+  list(REMOVE_ITEM HEADER_FILES HelpersVgf.h)
+endif()
 
 add_library(LVKLibrary ${SRC_FILES} ${HEADER_FILES})
 

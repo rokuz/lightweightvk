@@ -321,8 +321,15 @@ VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(
       } else {
         LLOGW("Specify a value for `--height <pixels>`");
       }
+    } else if (!strcmp(argv[i], "--no-ml-emulation")) {
+      cfg_.contextConfig.enableMLEmulationLayer = false;
     }
   }
+#if defined(LVK_ML_EMULATION_LAYER_PATH)
+  if (cfg_.contextConfig.enableMLEmulationLayer && !cfg_.contextConfig.mlEmulationLayerPath) {
+    cfg_.contextConfig.mlEmulationLayerPath = LVK_ML_EMULATION_LAYER_PATH;
+  }
+#endif // LVK_ML_EMULATION_LAYER_PATH
 #endif // ANDROID
 #if defined(LVK_WITH_MINILOG)
   minilog::initialize(logFileName,
