@@ -5118,10 +5118,20 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
     return {};
   }
 
+  if (!formatProperties_[desc.format].sType) {
+    // precache format properties
+    formatProperties_[desc.format].sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2;
+    vkGetPhysicalDeviceFormatProperties2(vkPhysicalDevice_, vkFormat, &formatProperties_[desc.format]);
+  }
+
+  if (usageFlags & VK_IMAGE_USAGE_SAMPLED_BIT) {
+    if (!LVK_VERIFY(formatProperties_[desc.format].formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT)) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "Format does not support sampled images on this device");
+      return {};
+    }
+  }
   if (usageFlags & VK_IMAGE_USAGE_STORAGE_BIT) {
-    VkFormatProperties2 props2 = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};
-    vkGetPhysicalDeviceFormatProperties2(vkPhysicalDevice_, vkFormat, &props2);
-    if (!LVK_VERIFY(props2.formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
+    if (!LVK_VERIFY(formatProperties_[desc.format].formatProperties.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT)) {
       Result::setResult(outResult, Result::Code::RuntimeError, "Format does not support storage images on this device");
       return {};
     }

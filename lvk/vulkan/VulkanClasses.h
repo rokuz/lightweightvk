@@ -920,6 +920,7 @@ class VulkanContext final : public IContext {
   uint32_t deviceLocalMemoryTypeMask_ = 0; // bitmask of device-local memory type indices
   std::vector<const char*> enabledInstanceExtensionNames_;
   std::vector<const char*> enabledDeviceExtensionNames_;
+  std::vector<VkFormatProperties2> formatProperties_{lvk::Format_YUV_420p + 1};
 
   TextureHandle dummyTexture_;
 
