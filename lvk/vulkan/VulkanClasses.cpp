@@ -4608,6 +4608,11 @@ lvk::VulkanContext::~VulkanContext() {
 
   destroy(dummyTexture_);
 
+  if (dummyTLAS_) {
+    vkDestroyAccelerationStructureKHR(vkDevice_, dummyTLAS_, nullptr);
+    destroy(dummyTLASBuffer_);
+  }
+
   for (VulkanContextImpl::YcbcrConversionData& data : pimpl_->ycbcrConversionData_) {
     if (data.info.conversion != VK_NULL_HANDLE) {
       vkDestroySamplerYcbcrConversion(vkDevice_, data.info.conversion, nullptr);
@@ -4961,7 +4966,11 @@ lvk::Holder<lvk::AccelStructHandle> lvk::VulkanContext::createAccelerationStruct
 
   Result::setResult(outResult, result);
 
-  awaitingCreation_ = true;
+  createDummyTLAS();
+
+  if (!writeAccelStructDescriptor(handle.index())) {
+    awaitingCreation_ = true;
+  }
 
   return {this, handle};
 }
@@ -5380,7 +5389,9 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
 
   TextureHandle handle = texturesPool_.create(std::move(image));
 
-  awaitingCreation_ = true;
+  if (!writeTextureDescriptor(handle.index())) {
+    awaitingCreation_ = true;
+  }
 
   if (desc.data) {
     LVK_ASSERT(desc.type == TextureType_2D || desc.type == TextureType_Cube);
@@ -5521,7 +5532,9 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTextureView(lvk::Textu
 
   TextureHandle handle = texturesPool_.create(std::move(image));
 
-  awaitingCreation_ = true;
+  if (!writeTextureDescriptor(handle.index())) {
+    awaitingCreation_ = true;
+  }
 
   return {this, handle};
 }
@@ -8991,6 +9004,174 @@ void lvk::VulkanContext::bindDefaultDescriptorSets(VkCommandBuffer cmdBuf, VkPip
   vkCmdBindDescriptorSets(cmdBuf, bindPoint, layout, 0, 1, &DSets_[lastUpdatedDSet_].vkDSet, 0, nullptr);
 }
 
+// A newly created resource occupies a slot no pending command buffer can reference: a fresh index has never been bound, and a recycled
+// one is only returned to the free list once the submission which used it has retired. Together with
+// VK_DESCRIPTOR_BINDING_UPDATE_AFTER_BIND_BIT this makes it safe to patch the live descriptor set in place
+bool lvk::VulkanContext::writeTextureDescriptor(uint32_t index) {
+  if (awaitingCreation_ || awaitingNewImmutableSamplers_ || DSets_.empty()) {
+    // a full rebuild is already pending and covers this slot too (immutable samplers require a full rebuild of the descriptor set layout)
+    return false;
+  }
+
+  const DescriptorSet& dset = DSets_[lastUpdatedDSet_];
+
+  if (!dset.vkDSet || index >= dset.maxTextures) {
+    return false; // the descriptor array has to grow first
+  }
+
+  const VulkanImage& img = texturesPool_.objects_[index];
+
+  if (lvk::getNumImagePlanes(img.vkImageFormat_) > 1) {
+    // a YUV texture needs an immutable sampler, which is baked into the layout and cannot be patched per slot
+    return false;
+  }
+
+  const VkImageView dummyImageView = texturesPool_.objects_[0].imageView_;
+  const VkImageView view = img.imageView_;
+  const VkImageView storageView = img.imageViewStorage_ ? img.imageViewStorage_ : view;
+  // multisampled images cannot be directly accessed from shaders
+  const bool isTextureAvailable = (img.vkSamples_ & VK_SAMPLE_COUNT_1_BIT) == VK_SAMPLE_COUNT_1_BIT;
+  const bool isSampledImage = isTextureAvailable && img.isSampledImage();
+  const bool isStorageImage = isTextureAvailable && img.isStorageImage();
+
+  const VkDescriptorImageInfo infoSampledImage = {
+      .imageView = isSampledImage ? view : dummyImageView,
+      .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+  };
+  const VkDescriptorImageInfo infoStorageImage = {
+      .imageView = isStorageImage ? storageView : dummyImageView,
+      .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
+  };
+
+  const VkWriteDescriptorSet write[] = {
+      VkWriteDescriptorSet{
+          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+          .dstSet = dset.vkDSet,
+          .dstBinding = kBinding_Textures,
+          .dstArrayElement = index,
+          .descriptorCount = 1,
+          .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,
+          .pImageInfo = &infoSampledImage,
+      },
+      VkWriteDescriptorSet{
+          .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+          .dstSet = dset.vkDSet,
+          .dstBinding = kBinding_StorageImages,
+          .dstArrayElement = index,
+          .descriptorCount = 1,
+          .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+          .pImageInfo = &infoStorageImage,
+      },
+  };
+
+  vkUpdateDescriptorSets(vkDevice_, LVK_ARRAY_NUM_ELEMENTS(write), write, 0, nullptr);
+
+  return true;
+}
+
+bool lvk::VulkanContext::writeSamplerDescriptor(uint32_t index) {
+  if (awaitingCreation_ || awaitingNewImmutableSamplers_ || DSets_.empty()) {
+    // a full rebuild is already pending and covers this slot too (immutable samplers require a full rebuild of the descriptor set layout)
+    return false;
+  }
+
+  const DescriptorSet& dset = DSets_[lastUpdatedDSet_];
+
+  if (!dset.vkDSet || index >= dset.maxSamplers) {
+    return false; // the descriptor array has to grow first
+  }
+
+  const VkDescriptorImageInfo info = {
+      .sampler = samplersPool_.objects_[index],
+  };
+  const VkWriteDescriptorSet write = {
+      .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .dstSet = dset.vkDSet,
+      .dstBinding = kBinding_Samplers,
+      .dstArrayElement = index,
+      .descriptorCount = 1,
+      .descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER,
+      .pImageInfo = &info,
+  };
+
+  vkUpdateDescriptorSets(vkDevice_, 1, &write, 0, nullptr);
+
+  return true;
+}
+
+// Every element of `kBinding_AccelerationStructures` has to be a valid TLAS. It is never built - never access it from a shader
+void lvk::VulkanContext::createDummyTLAS() {
+  if (dummyTLAS_) {
+    return;
+  }
+
+  const VkDeviceSize kDummyTLASSize = 256; // just a reservation inside the buffer
+
+  lvk::Holder<lvk::BufferHandle> buffer = createBuffer(
+      {
+          .usage = lvk::BufferUsageBits_AccelStructStorage,
+          .storage = lvk::StorageType_Device,
+          .size = kDummyTLASSize,
+      },
+      "Buffer: dummy TLAS",
+      nullptr);
+
+  if (!LVK_VERIFY(buffer.valid())) {
+    return;
+  }
+
+  const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
+      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+      .buffer = getVkBuffer(this, buffer),
+      .size = kDummyTLASSize,
+      .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+  };
+  VK_ASSERT(vkCreateAccelerationStructureKHR(vkDevice_, &ciAccelerationStructure, nullptr, &dummyTLAS_));
+
+  if (LVK_VERIFY(dummyTLAS_)) {
+    dummyTLASBuffer_ = buffer.release();
+  }
+}
+
+bool lvk::VulkanContext::writeAccelStructDescriptor(uint32_t index) {
+  if (awaitingCreation_ || awaitingNewImmutableSamplers_ || DSets_.empty()) {
+    // a full rebuild is already pending and covers this slot too (immutable samplers require a full rebuild of the descriptor set layout)
+    return false;
+  }
+
+  if (!dummyTLAS_) {
+    return false; // a BLAS slot cannot be written without it
+  }
+
+  const DescriptorSet& dset = DSets_[lastUpdatedDSet_];
+
+  if (!dset.vkDSet || index >= dset.maxAccelStructs) {
+    return false; // the descriptor array has to grow first
+  }
+
+  const AccelerationStructure& as = accelStructuresPool_.objects_[index];
+  const VkAccelerationStructureKHR handle = as.isTLAS ? as.vkHandle : dummyTLAS_;
+
+  const VkWriteDescriptorSetAccelerationStructureKHR writeAccelStruct = {
+      .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET_ACCELERATION_STRUCTURE_KHR,
+      .accelerationStructureCount = 1,
+      .pAccelerationStructures = &handle,
+  };
+  const VkWriteDescriptorSet write = {
+      .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
+      .pNext = &writeAccelStruct,
+      .dstSet = dset.vkDSet,
+      .dstBinding = kBinding_AccelerationStructures,
+      .dstArrayElement = index,
+      .descriptorCount = 1,
+      .descriptorType = VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR,
+  };
+
+  vkUpdateDescriptorSets(vkDevice_, 1, &write, 0, nullptr);
+
+  return true;
+}
+
 void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
   if (!awaitingCreation_) {
     // nothing to update here
@@ -9111,17 +9292,8 @@ void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
   std::vector<VkAccelerationStructureKHR> handlesAccelStructs;
   handlesAccelStructs.reserve(accelStructuresPool_.objects_.size());
 
-  // use the first valid TLAS as a dummy
-  const VkAccelerationStructureKHR dummyTLAS = [this]() -> VkAccelerationStructureKHR {
-    for (const lvk::AccelerationStructure& as : accelStructuresPool_.objects_) {
-      if (as.vkHandle && as.isTLAS)
-        return as.vkHandle;
-    }
-    return VK_NULL_HANDLE;
-  }();
-
   for (const lvk::AccelerationStructure& as : accelStructuresPool_.objects_) {
-    handlesAccelStructs.push_back(as.isTLAS ? as.vkHandle : dummyTLAS);
+    handlesAccelStructs.push_back(as.isTLAS ? as.vkHandle : dummyTLAS_);
   }
 
   VkWriteDescriptorSetAccelerationStructureKHR writeAccelStruct = {
@@ -9133,7 +9305,7 @@ void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
   VkWriteDescriptorSet write[kBinding_NumBindings] = {};
   uint32_t numWrites = 0;
 
-  if (!handlesAccelStructs.empty()) {
+  if (!handlesAccelStructs.empty() && dummyTLAS_) {
     write[numWrites++] = VkWriteDescriptorSet{
         .sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET,
         .pNext = &writeAccelStruct,
@@ -9237,7 +9409,9 @@ lvk::SamplerHandle lvk::VulkanContext::createSampler(const VkSamplerCreateInfo& 
 
   SamplerHandle handle = samplersPool_.create(VkSampler(sampler));
 
-  awaitingCreation_ = true;
+  if (!writeSamplerDescriptor(handle.index())) {
+    awaitingCreation_ = true;
+  }
 
   return handle;
 }
