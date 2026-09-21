@@ -831,6 +831,9 @@ struct RenderPass final {
 
   uint32_t layerCount = 1;
   uint32_t viewMask = 0;
+  // the render area of an attachmentless render pass - both must be set explicitly, there is no attachment to derive them from
+  uint32_t attachmentlessWidth = 0;
+  uint32_t attachmentlessHeight = 0;
 
   uint32_t getNumColorAttachments() const {
     uint32_t n = 0;

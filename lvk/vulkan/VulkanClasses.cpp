@@ -2946,8 +2946,11 @@ void lvk::CommandBuffer::cmdBeginRendering(const lvk::RenderPass& renderPass, co
     fbHeight = dim.height;
   }
 
-  const uint32_t width = std::max(fbWidth >> mipLevel, 1u);
-  const uint32_t height = std::max(fbHeight >> mipLevel, 1u);
+  LVK_ASSERT_MSG(fbWidth || (renderPass.attachmentlessWidth && renderPass.attachmentlessHeight),
+                 "The framebuffer has no attachments: set RenderPass::attachmentlessWidth and RenderPass::attachmentlessHeight");
+
+  const uint32_t width = fbWidth ? std::max(fbWidth >> mipLevel, 1u) : std::max(renderPass.attachmentlessWidth, 1u);
+  const uint32_t height = fbHeight ? std::max(fbHeight >> mipLevel, 1u) : std::max(renderPass.attachmentlessHeight, 1u);
   const lvk::Viewport viewport = {0.0f, 0.0f, (float)width, (float)height, 0.0f, +1.0f};
   const lvk::ScissorRect scissor = {0, 0, width, height};
 
@@ -6348,14 +6351,6 @@ lvk::Holder<lvk::RayTracingPipelineHandle> lvk::VulkanContext::createRayTracingP
 }
 
 lvk::Holder<lvk::RenderPipelineHandle> lvk::VulkanContext::createRenderPipeline(const RenderPipelineDesc& desc, Result* outResult) {
-  const bool hasColorAttachments = desc.getNumColorAttachments() > 0;
-  const bool hasDepthAttachment = desc.depthFormat != Format_Invalid;
-  const bool hasAnyAttachments = hasColorAttachments || hasDepthAttachment;
-  if (!LVK_VERIFY(hasAnyAttachments)) {
-    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Need at least one attachment");
-    return {};
-  }
-
   if (desc.smMesh.valid()) {
     if (!LVK_VERIFY(!desc.vertexInput.getNumAttributes() && !desc.vertexInput.getNumInputBindings())) {
       Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Cannot have vertexInput with mesh shaders");
