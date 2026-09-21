@@ -3797,6 +3797,9 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
 
   lvk::AccelerationStructure* as = ctx_->accelStructuresPool_.get(handle);
 
+  LVK_ASSERT_MSG(as->buildFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR,
+                 "TLAS must be created with AccelStructBuildFlagBits_AllowUpdate to be updated");
+
   const VkAccelerationStructureGeometryKHR accelerationStructureGeometry{
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR,
       .geometryType = VK_GEOMETRY_TYPE_INSTANCES_KHR,
@@ -3815,7 +3818,7 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
   VkAccelerationStructureBuildGeometryInfoKHR accelerationStructureBuildGeometryInfo{
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
       .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-      .flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR,
+      .flags = as->buildFlags,
       .geometryCount = 1,
       .pGeometries = &accelerationStructureGeometry,
   };
@@ -3849,7 +3852,7 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
   const VkAccelerationStructureBuildGeometryInfoKHR accelerationBuildGeometryInfo = {
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
       .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-      .flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR | VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR,
+      .flags = as->buildFlags,
       .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR,
       .srcAccelerationStructure = as->vkHandle,
       .dstAccelerationStructure = as->vkHandle,
@@ -5533,6 +5536,7 @@ lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& des
     (void)snprintf(debugNameBuffer, sizeof(debugNameBuffer) - 1, "Buffer: %s", desc.debugName);
   }
   lvk::AccelerationStructure accelStruct = {
+      .buildFlags = buildFlagsToVkBuildAccelerationStructureFlags(desc.buildFlags),
       .buildRangeInfo =
           {
               .primitiveCount = desc.buildRange.primitiveCount,
@@ -5612,6 +5616,7 @@ lvk::AccelStructHandle lvk::VulkanContext::createTLAS(const AccelStructDesc& des
   }
   lvk::AccelerationStructure accelStruct = {
       .isTLAS = true,
+      .buildFlags = buildFlagsToVkBuildAccelerationStructureFlags(desc.buildFlags),
       .buildRangeInfo =
           {
               .primitiveCount = desc.buildRange.primitiveCount,
@@ -7805,7 +7810,7 @@ void lvk::VulkanContext::getBuildInfoBLAS(const AccelStructDesc& desc,
   const VkAccelerationStructureBuildGeometryInfoKHR accelerationBuildGeometryInfo{
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
       .type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-      .flags = VK_BUILD_ACCELERATION_STRUCTURE_PREFER_FAST_TRACE_BIT_KHR,
+      .flags = buildFlagsToVkBuildAccelerationStructureFlags(desc.buildFlags),
       .geometryCount = 1,
       .pGeometries = &outGeometry,
   };

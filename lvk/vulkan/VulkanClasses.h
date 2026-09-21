@@ -392,6 +392,7 @@ struct ShaderModuleState final {
 
 struct AccelerationStructure {
   bool isTLAS = false;
+  VkBuildAccelerationStructureFlagsKHR buildFlags = 0; // an update has to be built with the same flags
   VkAccelerationStructureBuildRangeInfoKHR buildRangeInfo = {};
   VkAccelerationStructureKHR vkHandle = VK_NULL_HANDLE;
   uint64_t deviceAddress = 0;
