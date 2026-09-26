@@ -234,9 +234,9 @@ def infer(module, inputShape):
     return shapes
 
 
-def specialize(module, inputShape):
+def specialize(module, inputShape, inferShapes=None):
     """Gives every operator result and the graph interface a shaped tensor type. Returns (lines, output shapes)."""
-    shapes = infer(module, inputShape)
+    shapes = (inferShapes or infer)(module, inputShape)
     inputId, inputLine = module.graphInput()
     outputIds = module.graphOutputs()
 

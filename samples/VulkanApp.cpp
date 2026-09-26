@@ -12,6 +12,7 @@
 #include "VulkanApp.h"
 
 #include <filesystem>
+#include <fstream>
 #include <vector>
 
 #include <stb/stb_image.h>
@@ -284,53 +285,68 @@ double glfwGetTime() {
 
 #if defined(ANDROID)
 VulkanApp::VulkanApp(android_app* androidApp, const VulkanAppConfig& cfg) : androidApp_(androidApp), cfg_(cfg) {
-  const char* logFileName = nullptr;
+  if (androidApp_ && androidApp_->activity && androidApp_->activity->obbPath) {
+    std::ifstream file(std::string(androidApp_->activity->obbPath) + "/args.txt");
+    for (std::string arg; file >> arg;) {
+      args_.push_back(arg);
+    }
+  }
 #else
 VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(cfg) {
-  const char* logFileName = nullptr;
   for (int i = 1; i < argc; i++) {
-    if (!strcmp(argv[i], "--headless")) {
+    args_.push_back(argv[i]);
+  }
+#endif // ANDROID
+  const char* logFileName = nullptr;
+  for (size_t i = 0; i < args_.size(); i++) {
+    const char* arg = args_[i].c_str();
+    const char* next = i + 1 < args_.size() ? args_[i + 1].c_str() : nullptr;
+    if (!strcmp(arg, "--headless")) {
       cfg_.contextConfig.enableHeadlessSurface = true;
-    } else if (!strcmp(argv[i], "--log-file")) {
-      if (i + 1 < argc) {
-        logFileName = argv[++i];
+    } else if (!strcmp(arg, "--log-file")) {
+      if (next) {
+        logFileName = next;
+        i++;
       } else {
         LLOGW("Specify a file name for `--log-file <filename>`");
       }
-    } else if (!strcmp(argv[i], "--screenshot-frame")) {
-      if (i + 1 < argc) {
-        cfg_.screenshotFrameNumber = strtoull(argv[++i], nullptr, 10);
+    } else if (!strcmp(arg, "--screenshot-frame")) {
+      if (next) {
+        cfg_.screenshotFrameNumber = strtoull(next, nullptr, 10);
+        i++;
       } else {
         LLOGW("Specify a frame number for `--screenshot-frame <framenumber>`");
       }
-    } else if (!strcmp(argv[i], "--screenshot-file")) {
-      if (i + 1 < argc) {
-        cfg_.screenshotFileName = argv[++i];
+    } else if (!strcmp(arg, "--screenshot-file")) {
+      if (next) {
+        cfg_.screenshotFileName = next;
+        i++;
       } else {
         LLOGW("Specify a file name for `--screenshot-file <filename>`");
       }
-    } else if (!strcmp(argv[i], "--width")) {
-      if (i + 1 < argc) {
-        cfg_.width = (int)strtol(argv[++i], nullptr, 10);
+    } else if (!strcmp(arg, "--width")) {
+      if (next) {
+        cfg_.width = (int)strtol(next, nullptr, 10);
+        i++;
       } else {
         LLOGW("Specify a value for `--width <pixels>`");
       }
-    } else if (!strcmp(argv[i], "--height")) {
-      if (i + 1 < argc) {
-        cfg_.height = (int)strtol(argv[++i], nullptr, 10);
+    } else if (!strcmp(arg, "--height")) {
+      if (next) {
+        cfg_.height = (int)strtol(next, nullptr, 10);
+        i++;
       } else {
         LLOGW("Specify a value for `--height <pixels>`");
       }
-    } else if (!strcmp(argv[i], "--no-ml-emulation")) {
+    } else if (!strcmp(arg, "--no-ml-emulation")) {
       cfg_.contextConfig.enableMLEmulationLayer = false;
     }
   }
-#if defined(LVK_ML_EMULATION_LAYER_PATH)
+#if defined(LVK_ML_EMULATION_LAYER_PATH) && !defined(ANDROID)
   if (cfg_.contextConfig.enableMLEmulationLayer && !cfg_.contextConfig.mlEmulationLayerPath) {
     cfg_.contextConfig.mlEmulationLayerPath = LVK_ML_EMULATION_LAYER_PATH;
   }
 #endif // LVK_ML_EMULATION_LAYER_PATH
-#endif // ANDROID
 #if defined(LVK_WITH_MINILOG)
   minilog::initialize(logFileName,
                       {
