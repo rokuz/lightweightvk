@@ -157,6 +157,7 @@ class VulkanApp {
   }
 #endif // LVK_WITH_OPENXR
  public:
+  std::vector<std::string> args_;
   std::string folderThirdParty_;
   std::string folderContentRoot_;
   int width_ = 0;
