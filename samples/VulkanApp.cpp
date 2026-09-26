@@ -339,12 +339,31 @@ VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(
   {
     using namespace std::filesystem;
 #if defined(ANDROID)
-    if (const char* externalStorage = std::getenv("EXTERNAL_STORAGE")) {
-      folderThirdParty_ = (path(externalStorage) / "LVK" / "deps" / "src").string() + "/";
-      folderContentRoot_ = (path(externalStorage) / "LVK" / "content").string() + "/";
-      tarBasePath_ = (path(externalStorage) / "LVK").string() + "/";
-      const std::string tarPath = (path(externalStorage) / "LVK" / "lvk_content.tar").string();
-      tarReader_ = std::make_unique<TarFileReader>(tarPath.c_str());
+    std::string archivePath;
+    std::string archiveRoot;
+    if (androidApp_ && androidApp_->activity && androidApp_->activity->obbPath) {
+      const path obbDir(androidApp_->activity->obbPath);
+      std::error_code ec;
+      for (directory_iterator it(obbDir, ec), end; it != end; it.increment(ec)) {
+        const std::string name = it->path().filename().string();
+        if (name.rfind("main.", 0) == 0 && name.size() > 4 && name.compare(name.size() - 4, 4, ".obb") == 0) {
+          archivePath = it->path().string();
+          archiveRoot = obbDir.string() + "/";
+          break;
+        }
+      }
+    }
+    if (archiveRoot.empty()) {
+      if (const char* externalStorage = std::getenv("EXTERNAL_STORAGE")) {
+        archiveRoot = (path(externalStorage) / "LVK").string() + "/";
+        archivePath = archiveRoot + "lvk_content.tar";
+      }
+    }
+    if (!archiveRoot.empty()) {
+      folderThirdParty_ = archiveRoot + "deps/src/";
+      folderContentRoot_ = archiveRoot + "content/";
+      tarBasePath_ = archiveRoot;
+      tarReader_ = std::make_unique<TarFileReader>(archivePath.c_str());
     }
 #else
     path subdir(cfg_.contentSubdir);
@@ -869,7 +888,28 @@ RenderView VulkanApp::makeSwapchainView() const {
 std::vector<uint8_t> VulkanApp::loadFile(const char* filePath) const {
 #if defined(ANDROID)
   if (tarReader_ && strncmp(filePath, tarBasePath_.c_str(), tarBasePath_.size()) == 0) {
-    const TarFileReader::FileData& fd = tarReader_->getFile(filePath + tarBasePath_.size());
+    std::vector<std::string> segments;
+    std::string segment;
+    for (const char* p = filePath + tarBasePath_.size();; p++) {
+      if (*p && *p != '/' && *p != '\\') {
+        segment += *p;
+        continue;
+      }
+      if (segment == "..") {
+        if (!segments.empty())
+          segments.pop_back();
+      } else if (!segment.empty() && segment != ".") {
+        segments.push_back(segment);
+      }
+      segment.clear();
+      if (!*p)
+        break;
+    }
+    std::string name;
+    for (const std::string& s : segments) {
+      name += name.empty() ? s : "/" + s;
+    }
+    const TarFileReader::FileData& fd = tarReader_->getFile(name.c_str());
     if (fd.ptr)
       return std::vector<uint8_t>(fd.ptr, fd.ptr + fd.size);
   }
