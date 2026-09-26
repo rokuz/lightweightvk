@@ -1746,7 +1746,8 @@ VULKAN_APP_MAIN {
       }
     }();
 
-    const std::vector<RenderView> views = [](int w, int h, float aspectRatio, const mat4& view) -> std::vector<RenderView> {
+    const std::vector<RenderView> views =
+        [](int w, int h, float aspectRatio, const mat4& view, const mat4& clipRotation) -> std::vector<RenderView> {
       const float fov = glm::radians(45.0f);
       const float nearPlane = 0.01f;
       const float farPlane = 100.0f;
@@ -1767,9 +1768,9 @@ VULKAN_APP_MAIN {
             {proj1, view * T1, lvk::Viewport{0, 0, halfW, float(h)}, lvk::ScissorRect{0, 0, (uint32_t)halfW, (uint32_t)h}},
         };
       }
-      const mat4 proj = glm::perspective(fov, aspectRatio, nearPlane, farPlane);
+      const mat4 proj = clipRotation * glm::perspective(fov, aspectRatio, nearPlane, farPlane);
       return {{proj, view, lvk::Viewport{0, 0, float(w), float(h)}, lvk::ScissorRect{0, 0, (uint32_t)w, (uint32_t)h}}};
-    }(app.width_, app.height_, aspectRatio, view);
+    }(app.width_, app.height_, aspectRatio, view, appViews[0].clipRotation);
 
     lvk::ICommandBuffer& buf = ctx->acquireCommandBuffer();
     const lvk::Framebuffer fb = {

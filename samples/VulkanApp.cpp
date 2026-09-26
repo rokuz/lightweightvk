@@ -584,8 +584,6 @@ void VulkanApp::run(DrawFrameFunc drawFrame) {
       simulatedTime_ += kTimeQuantum;
     }
     if (ctx_) {
-      const float ratio = width_ / (float)height_;
-
       const bool justPressed = mouseState_.pressedLeft && !imguiLastPressedLeft_;
 
       positioner_.update(
@@ -600,12 +598,7 @@ void VulkanApp::run(DrawFrameFunc drawFrame) {
       imguiClearMouseNextFrame_ = !mouseState_.pressedLeft && imguiLastPressedLeft_;
       imguiLastPressedLeft_ = mouseState_.pressedLeft;
 
-      const RenderView view = {
-          .viewport = {0.0f, 0.0f, (float)width_, (float)height_, 0.0f, 1.0f},
-          .scissorRect = {0, 0, (uint32_t)width_, (uint32_t)height_},
-          .colorTexture = ctx_->getCurrentSwapchainTexture(),
-          .aspectRatio = ratio,
-      };
+      const RenderView view = makeSwapchainView();
       drawFrame({&view, 1}, deltaSeconds);
     }
     if (ALooper_pollOnce(0, nullptr, &events, (void**)&source) >= 0) {
@@ -643,14 +636,7 @@ void VulkanApp::run(DrawFrameFunc drawFrame) {
       LLOGL("FPS: %.1f\n", fpsCounter_.getFPS());
     }
 
-    const float ratio = width_ / (float)height_;
-
-    const RenderView view = {
-        .viewport = {0.0f, 0.0f, (float)width_, (float)height_, 0.0f, 1.0f},
-        .scissorRect = {0, 0, (uint32_t)width_, (uint32_t)height_},
-        .colorTexture = ctx_->getCurrentSwapchainTexture(),
-        .aspectRatio = ratio,
-    };
+    const RenderView view = makeSwapchainView();
 
     drawFrame({&view, 1}, deltaSeconds);
 
@@ -804,16 +790,9 @@ void VulkanApp::run(DrawFrameFunc drawFrame) {
     if (!ctx_ || !width_ || !height_)
       continue;
 
-    const float ratio = width_ / (float)height_;
-
     positioner_.update(deltaSeconds, mouseState_.pos, ImGui::GetIO().WantCaptureMouse ? false : mouseState_.pressedLeft);
 
-    const RenderView view = {
-        .viewport = {0.0f, 0.0f, (float)width_, (float)height_, 0.0f, 1.0f},
-        .scissorRect = {0, 0, (uint32_t)width_, (uint32_t)height_},
-        .colorTexture = ctx_->getCurrentSwapchainTexture(),
-        .aspectRatio = ratio,
-    };
+    const RenderView view = makeSwapchainView();
 
     drawFrame({&view, 1}, deltaSeconds);
 
@@ -869,6 +848,22 @@ void VulkanApp::drawFPS() {
     ImGui::Text("Ms  : %.1f", fpsCounter_.getFPS() > 0 ? 1000.0 / fpsCounter_.getFPS() : 0);
   }
   ImGui::End();
+}
+
+RenderView VulkanApp::makeSwapchainView() const {
+  const lvk::SurfaceTransform surfaceTransform = ctx_->getSwapchainSurfaceTransform();
+  float c = 1.0f;
+  float s = 0.0f;
+  lvk::getSurfaceTransformRotation(surfaceTransform, c, s);
+  const uint32_t imageWidth = lvk::isQuarterTurn(surfaceTransform) ? height_ : width_;
+  const uint32_t imageHeight = lvk::isQuarterTurn(surfaceTransform) ? width_ : height_;
+  return {
+      .viewport = {0.0f, 0.0f, (float)imageWidth, (float)imageHeight, 0.0f, 1.0f},
+      .scissorRect = {0, 0, imageWidth, imageHeight},
+      .colorTexture = ctx_->getCurrentSwapchainTexture(),
+      .aspectRatio = width_ / (float)height_,
+      .clipRotation = mat4(c, s, 0, 0, -s, c, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1),
+  };
 }
 
 std::vector<uint8_t> VulkanApp::loadFile(const char* filePath) const {

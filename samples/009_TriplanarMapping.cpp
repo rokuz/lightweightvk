@@ -405,7 +405,7 @@ VULKAN_APP_MAIN {
 
     const float fov = float(45.0f * (M_PI / 180.0f));
     const PerFrame perFrame = {
-        .proj = glm::perspectiveLH(fov, views[0].aspectRatio, 0.1f, 100.0f),
+        .proj = views[0].clipRotation * glm::perspectiveLH(fov, views[0].aspectRatio, 0.1f, 100.0f),
         // place the "camera" behind the objects, the distance depends on the total number of objects
         .view = glm::translate(mat4(1.0f), vec3(0.0f, 0.0f, sqrtf(kNumObjects / 16) * 14.0f * t)),
         .texture0 = texture0_.index(),

@@ -897,7 +897,7 @@ VULKAN_APP_MAIN {
       const PerFrame perFrame = {.proj = views[i].proj, .view = views[i].view};
 #else
       const PerFrame perFrame = {
-          .proj = glm::perspective(glm::radians(90.0f), views[i].aspectRatio, 0.1f, 100.0f),
+          .proj = views[i].clipRotation * glm::perspective(glm::radians(90.0f), views[i].aspectRatio, 0.1f, 100.0f),
           .view = glm::translate(mat4(1.0f), vec3(0.0f, 0.0f, -8.0f)),
       };
 #endif

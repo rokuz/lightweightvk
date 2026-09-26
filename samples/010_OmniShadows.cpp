@@ -539,7 +539,7 @@ VULKAN_APP_MAIN {
         .shadowMap = shadowMap.index(),
     };
     const PerFrame perFrame = {
-        .proj = glm::perspective(fov, views[0].aspectRatio, 0.1f, 100.0f),
+        .proj = views[0].clipRotation * glm::perspective(fov, views[0].aspectRatio, 0.1f, 100.0f),
         .view = app.camera_.getViewMatrix(),
     };
     const PerFrameShadow perFrameShadow = {

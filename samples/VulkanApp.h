@@ -80,6 +80,7 @@ struct RenderView {
   lvk::TextureHandle colorTexture;
   lvk::TextureHandle depthTexture;
   float aspectRatio = 1.0f;
+  mat4 clipRotation = mat4(1.0f);
 };
 
 using DrawFrameFunc = std::function<void(ldr::Span<const RenderView> views, float deltaSeconds)>;
@@ -119,6 +120,7 @@ class VulkanApp {
   virtual void drawFPS();
 
   std::vector<uint8_t> loadFile(const char* filePath) const;
+  RenderView makeSwapchainView() const;
 
   double getSimulatedTime() const;
 
