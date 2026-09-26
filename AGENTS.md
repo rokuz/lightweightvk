@@ -56,7 +56,7 @@ cd android/001_HelloTriangle  # or any other sample
 ./gradlew assembleDebug
 ```
 
-For Android devices: `python3 deploy_content_android.py`
+For Android devices: `python3 deploy_content_android.py` (or configure with `-DLVK_ANDROID_OBB_CONTENT=ON` and build the `LVKAndroidContent` target, which installs the same archive as the OBB of every generated demo)
 
 ### Building
 ```bash
@@ -96,6 +96,7 @@ To check CI status: `gh run list` or `gh run view <run-id>`.
 - `LVK_WITH_IMPLOT`: Enable ImPlot (default: ON)
 - `LVK_WITH_OPENXR`: Enable OpenXR (default: OFF)
 - `LVK_WITH_ANDROID_VALIDATION`: Enable validation layers on Android (default: ON)
+- `LVK_ANDROID_OBB_CONTENT`: Pack the sample content into an OBB for every generated Android demo, through the `LVKAndroidContent` target (default: OFF). The archive is the same for all of them, only the OBB name differs. Left off, the samples expect `python deploy_content_android.py` to have pushed it to `$EXTERNAL_STORAGE/LVK` by hand
 - `LVK_WITH_MINILOG`: Enable Minilog (default: ON)
 - `LVK_WITH_SLANG`: Enable Slang compiler (default: OFF)
 - `LVK_WITH_SPIRV_OPT`: Run SPIRV optimization on shaders (default: OFF)
