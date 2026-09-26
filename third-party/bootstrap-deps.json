@@ -324,7 +324,7 @@
     "source": {
         "type": "git",
         "url": "https://github.com/rokuz/ai-ml-emulation-layer-for-vulkan.git",
-        "revision": "e45cb74259f07aff76004d95f15a8790b6a1c345",
+        "revision": "9dd2aa9e512c7aaaa2e2afdaacafb233c19972c2",
         "recursive": false
     }
 },
