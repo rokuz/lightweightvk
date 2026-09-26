@@ -257,6 +257,31 @@ enum SurfaceTransform : uint8_t {
   SurfaceTransform_Rotate270,
 };
 
+inline bool isQuarterTurn(SurfaceTransform transform) {
+  return transform == SurfaceTransform_Rotate90 || transform == SurfaceTransform_Rotate270;
+}
+
+inline void getSurfaceTransformRotation(SurfaceTransform transform, float& outCos, float& outSin) {
+  switch (transform) {
+  case SurfaceTransform_Rotate90:
+    outCos = 0.0f;
+    outSin = -1.0f;
+    break;
+  case SurfaceTransform_Rotate180:
+    outCos = -1.0f;
+    outSin = 0.0f;
+    break;
+  case SurfaceTransform_Rotate270:
+    outCos = 0.0f;
+    outSin = 1.0f;
+    break;
+  default:
+    outCos = 1.0f;
+    outSin = 0.0f;
+    break;
+  }
+}
+
 enum TextureType : uint8_t {
   TextureType_2D,
   TextureType_3D,
