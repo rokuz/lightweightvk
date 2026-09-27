@@ -28,6 +28,13 @@ if(ANDROID)
   else()
     cmake_path(SET NDK_PATH $ENV{NDK_ROOT})
   endif()
+  file(COPY "${NDK_PATH}/sources/android/native_app_glue/android_native_app_glue.c"
+            "${NDK_PATH}/sources/android/native_app_glue/android_native_app_glue.h"
+       DESTINATION "${CMAKE_BINARY_DIR}/native_app_glue")
+  add_library(native_app_glue STATIC "${CMAKE_BINARY_DIR}/native_app_glue/android_native_app_glue.c")
+  target_include_directories(native_app_glue PUBLIC "${CMAKE_BINARY_DIR}/native_app_glue")
+  target_link_libraries(native_app_glue PUBLIC android log)
+  target_link_options(native_app_glue INTERFACE "LINKER:-u,ANativeActivity_onCreate")
 endif()
 
 add_library(LVKVulkanApp
@@ -42,8 +49,7 @@ target_link_libraries(LVKVulkanApp PUBLIC LVKstb)
 target_link_libraries(LVKVulkanApp PUBLIC LUtils)
 target_link_libraries(LVKVulkanApp PUBLIC ktx)
 if(ANDROID)
-  target_include_directories(LVKVulkanApp PUBLIC "${NDK_PATH}/sources/android/native_app_glue")
-  target_link_libraries(LVKVulkanApp PUBLIC android)
+  target_link_libraries(LVKVulkanApp PUBLIC native_app_glue)
 endif()
 
 macro(ADD_DEMO_TARGET app target_name defs)
@@ -147,9 +153,7 @@ macro(ADD_DEMO app) # optional args: `demo_has_slang` `demo_has_openxr`
     endif()
 
     if(ANDROID)
-      add_library(lvk_android_native_${app} SHARED
-                  "${app}.cpp"
-                  "${NDK_PATH}/sources/android/native_app_glue/android_native_app_glue.c")
+      add_library(lvk_android_native_${app} SHARED "${app}.cpp")
       lvk_set_cxxstd(lvk_android_native_${app} 20)
       target_link_libraries(lvk_android_native_${app} PUBLIC
                             LVKVulkanApp LVKLibrary LVKVulkan LVKstb meshoptimizer fast_obj_lib)
