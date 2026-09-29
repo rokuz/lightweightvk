@@ -28,13 +28,6 @@ if(ANDROID)
   else()
     cmake_path(SET NDK_PATH $ENV{NDK_ROOT})
   endif()
-  file(COPY "${NDK_PATH}/sources/android/native_app_glue/android_native_app_glue.c"
-            "${NDK_PATH}/sources/android/native_app_glue/android_native_app_glue.h"
-       DESTINATION "${CMAKE_BINARY_DIR}/native_app_glue")
-  add_library(native_app_glue STATIC "${CMAKE_BINARY_DIR}/native_app_glue/android_native_app_glue.c")
-  target_include_directories(native_app_glue PUBLIC "${CMAKE_BINARY_DIR}/native_app_glue")
-  target_link_libraries(native_app_glue PUBLIC android log)
-  target_link_options(native_app_glue INTERFACE "LINKER:-u,ANativeActivity_onCreate")
 endif()
 
 add_library(LVKVulkanApp
@@ -49,7 +42,10 @@ target_link_libraries(LVKVulkanApp PUBLIC LVKstb)
 target_link_libraries(LVKVulkanApp PUBLIC LUtils)
 target_link_libraries(LVKVulkanApp PUBLIC ktx)
 if(ANDROID)
-  target_link_libraries(LVKVulkanApp PUBLIC native_app_glue)
+  target_sources(LVKVulkanApp PRIVATE "${NDK_PATH}/sources/android/native_app_glue/android_native_app_glue.c")
+  target_include_directories(LVKVulkanApp PUBLIC "${NDK_PATH}/sources/android/native_app_glue")
+  target_link_libraries(LVKVulkanApp PUBLIC android log)
+  target_link_options(LVKVulkanApp INTERFACE "LINKER:-u,ANativeActivity_onCreate")
 endif()
 
 macro(ADD_DEMO_TARGET app target_name defs)
