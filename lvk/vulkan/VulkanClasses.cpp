@@ -1704,7 +1704,7 @@ lvk::VulkanImmediateCommands::VulkanImmediateCommands(VkDevice device,
 : device_(device)
 , queueFamilyIndex_(queueFamilyIndex)
 , has_EXT_device_fault_(has_EXT_device_fault)
-, debugName_(debugName) {
+, debugName_(debugName ? debugName : "") {
   LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_CREATE);
 
   vkGetDeviceQueue(device, queueFamilyIndex, 0, &queue_);
@@ -1715,7 +1715,10 @@ lvk::VulkanImmediateCommands::VulkanImmediateCommands(VkDevice device,
       .queueFamilyIndex = queueFamilyIndex,
   };
   VK_ASSERT(vkCreateCommandPool(device, &ci, nullptr, &commandPool_));
-  VK_ASSERT(lvk::setDebugObjectName(device, VK_OBJECT_TYPE_COMMAND_POOL, (uint64_t)commandPool_, debugName));
+
+  char objectName[256] = {0};
+  (void)snprintf(objectName, sizeof(objectName) - 1, "Command Pool: %s", debugName_);
+  VK_ASSERT(lvk::setDebugObjectName(device, VK_OBJECT_TYPE_COMMAND_POOL, (uint64_t)commandPool_, objectName));
 
   const VkCommandBufferAllocateInfo ai = {
       .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -1726,24 +1729,19 @@ lvk::VulkanImmediateCommands::VulkanImmediateCommands(VkDevice device,
 
   for (uint32_t i = 0; i != kMaxCommandBuffers; i++) {
     CommandBufferWrapper& buf = buffers_[i];
-    char fenceName[256] = {0};
-    char semaphoreName[256] = {0};
-    if (debugName) {
-      (void)snprintf(fenceName, sizeof(fenceName) - 1, "Fence: %s (cmdbuf %u)", debugName, i);
-      (void)snprintf(semaphoreName, sizeof(semaphoreName) - 1, "Semaphore: %s (cmdbuf %u)", debugName, i);
-    }
-    buf.semaphore_ = lvk::createSemaphore(device, semaphoreName);
-    buf.fence_ = lvk::createFence(device, fenceName);
+    (void)snprintf(objectName, sizeof(objectName) - 1, "Semaphore: cmdbuf %u (%s)", i, debugName_);
+    buf.semaphore_ = lvk::createSemaphore(device, objectName);
+    (void)snprintf(objectName, sizeof(objectName) - 1, "Fence: cmdbuf %u (%s)", i, debugName_);
+    buf.fence_ = lvk::createFence(device, objectName);
     VK_ASSERT(vkAllocateCommandBuffers(device, &ai, &buf.cmdBufAllocated_));
+    (void)snprintf(objectName, sizeof(objectName) - 1, "Command Buffer: %u (%s)", i, debugName_);
+    VK_ASSERT(lvk::setDebugObjectName(device, VK_OBJECT_TYPE_COMMAND_BUFFER, (uint64_t)buf.cmdBufAllocated_, objectName));
     buffers_[i].handle_.bufferIndex_ = i;
     buffers_[i].handle_.queueFamilyIndex_ = queueFamilyIndex; // make every SubmitHandle self-describing
   }
 
-  char timelineName[256] = {0};
-  if (debugName) {
-    (void)snprintf(timelineName, sizeof(timelineName) - 1, "Semaphore: %s (timeline)", debugName);
-  }
-  submitTimelineSemaphore_ = lvk::createSemaphoreTimeline(device, 0, timelineName);
+  (void)snprintf(objectName, sizeof(objectName) - 1, "Semaphore: timeline (%s)", debugName_);
+  submitTimelineSemaphore_ = lvk::createSemaphoreTimeline(device, 0, objectName);
 }
 
 lvk::VulkanImmediateCommands::~VulkanImmediateCommands() {
