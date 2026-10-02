@@ -9302,6 +9302,18 @@ void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
   VkImageView dummyImageView = texturesPool_.objects_[0].imageView_;
   VkSampler dummySampler = samplersPool_.objects_[0];
 
+  // dummy slots use the first YUV texture's Ycbcr sampler, so they need its view too: a written view must carry the same
+  // conversion as its sampler (VUID-VkWriteDescriptorSet-descriptorType-01948)
+  VkImageView dummyYUVImageView = VK_NULL_HANDLE;
+
+  for (const VulkanImage& img : texturesPool_.objects_) {
+    const bool isTextureAvailable = (img.vkSamples_ & VK_SAMPLE_COUNT_1_BIT) == VK_SAMPLE_COUNT_1_BIT;
+    if (isTextureAvailable && img.isSampledImage() && lvk::getNumImagePlanes(img.vkImageFormat_) > 1) {
+      dummyYUVImageView = img.imageView_;
+      break;
+    }
+  }
+
   for (const VulkanImage& img : texturesPool_.objects_) {
     const VkImageView view = img.imageView_;
     const VkImageView storageView = img.imageViewStorage_ ? img.imageViewStorage_ : view;
@@ -9321,23 +9333,23 @@ void lvk::VulkanContext::checkAndUpdateDescriptorSets() {
         .imageView = isStorageImage ? storageView : dummyImageView,
         .imageLayout = VK_IMAGE_LAYOUT_GENERAL,
     });
-    if (hasYcbcrSamplers && !workaround_noYcbcrSamplerArray_) {
+    if (dummyYUVImageView && !workaround_noYcbcrSamplerArray_) {
       // we don't need to update this if there're no YUV samplers
       infoYUVImages.push_back(VkDescriptorImageInfo{
           .sampler = dummySampler, // this will be replaced by immutable samplers from VkPipeline
-          .imageView = isYUVImage ? view : dummyImageView,
+          .imageView = isYUVImage ? view : dummyYUVImageView,
           .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
       });
     }
   }
 
   // Adreno 840: single YUV descriptor using the active texture inferred from spec constants
-  if (hasYcbcrSamplers && workaround_noYcbcrSamplerArray_) {
+  if (dummyYUVImageView && workaround_noYcbcrSamplerArray_) {
     const uint32_t idx = pimpl_->workaround_activeYuvTextureIndex_;
     const bool isValidYuv = idx < texturesPool_.objects_.size() && lvk::getNumImagePlanes(texturesPool_.objects_[idx].vkImageFormat_) > 1;
     infoYUVImages.push_back(VkDescriptorImageInfo{
         .sampler = dummySampler,
-        .imageView = isValidYuv ? texturesPool_.objects_[idx].imageView_ : dummyImageView,
+        .imageView = isValidYuv ? texturesPool_.objects_[idx].imageView_ : dummyYUVImageView,
         .imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
     });
   }
