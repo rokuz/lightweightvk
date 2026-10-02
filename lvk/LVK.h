@@ -547,6 +547,7 @@ enum Format : uint8_t {
   Format_RG_F32,
 
   Format_RGBA_UN8,
+  Format_RGBA_SN8,
   Format_RGBA_UI8,
   Format_RGBA_I8,
   Format_RGBA_UI16,
