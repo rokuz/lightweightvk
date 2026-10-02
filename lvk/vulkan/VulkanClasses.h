@@ -681,6 +681,9 @@ class VulkanContext final : public IContext {
   bool supportsShaderInterlock() const override {
     return has_EXT_fragment_shader_interlock_;
   }
+  bool supportsRayQuery() const override {
+    return has_KHR_acceleration_structure_ && has_KHR_ray_query_;
+  }
   bool supportsRayTracingPipeline() const override {
     return has_KHR_acceleration_structure_ && has_KHR_ray_tracing_pipeline_;
   }

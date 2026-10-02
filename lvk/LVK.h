@@ -1356,6 +1356,7 @@ class IContext {
   virtual bool supportsDepthBounds() const = 0;
   virtual bool supportsMeshShader() const = 0;
   virtual bool supportsProvokingVertex() const = 0;
+  virtual bool supportsRayQuery() const = 0;
   virtual bool supportsRayTracingPipeline() const = 0;
   virtual bool supportsShaderInterlock() const = 0;
   virtual bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags = TextureUsageBits_Sampled) const = 0;
