@@ -8009,6 +8009,14 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   if (config_.enableFragmentShadingRate && hasExtension(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME, allDeviceExtensions)) {
     addNextPhysicalDeviceProperties(&vkFragmentShadingRateProperties_);
   }
+  if (hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, allDeviceExtensions)) {
+    vkTensorFeatures_.pNext = vkFeatures10_.pNext;
+    vkFeatures10_.pNext = &vkTensorFeatures_;
+  }
+  if (hasExtension(VK_ARM_DATA_GRAPH_EXTENSION_NAME, allDeviceExtensions)) {
+    vkDataGraphFeatures_.pNext = vkFeatures10_.pNext;
+    vkFeatures10_.pNext = &vkDataGraphFeatures_;
+  }
 
   if (config_.vulkanVersion >= VulkanVersion_1_4) {
     addNextPhysicalDeviceProperties(&vkPhysicalDeviceVulkan14Properties_);
@@ -8217,6 +8225,16 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR,
       .rayQuery = VK_TRUE,
   };
+  VkPhysicalDeviceTensorFeaturesARM tensorFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM,
+      .shaderTensorAccess = VK_TRUE,
+      .tensors = VK_TRUE,
+  };
+  VkPhysicalDeviceDataGraphFeaturesARM dataGraphFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_FEATURES_ARM,
+      .dataGraph = VK_TRUE,
+      .dataGraphShaderModule = VK_TRUE,
+  };
   VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT rayTracingInvocationReorderFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT,
       .rayTracingInvocationReorder = VK_TRUE,
@@ -8358,6 +8376,20 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
                         has_KHR_acceleration_structure_,
                         &accelerationStructureFeatures);
   addOptionalExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, has_KHR_ray_query_, &rayQueryFeatures);
+  // only ask for the feature bits the device reports, otherwise vkCreateDevice() fails
+  if (vkTensorFeatures_.tensors && vkTensorFeatures_.shaderTensorAccess) {
+    addOptionalExtension(VK_ARM_TENSORS_EXTENSION_NAME, has_ARM_tensors_, &tensorFeatures);
+  }
+  if (has_ARM_tensors_ && vkDataGraphFeatures_.dataGraph && vkDataGraphFeatures_.dataGraphShaderModule) {
+    // data graphs consume tensors, and their pipelines are built through VK_KHR_deferred_host_operations
+    bool hasDeferredHostOperations = has_KHR_acceleration_structure_;
+    if (!hasDeferredHostOperations) {
+      addOptionalExtension(VK_KHR_DEFERRED_HOST_OPERATIONS_EXTENSION_NAME, hasDeferredHostOperations);
+    }
+    if (hasDeferredHostOperations) {
+      addOptionalExtension(VK_ARM_DATA_GRAPH_EXTENSION_NAME, has_ARM_data_graph_, &dataGraphFeatures);
+    }
+  }
   addOptionalExtension(VK_KHR_RAY_TRACING_PIPELINE_EXTENSION_NAME, has_KHR_ray_tracing_pipeline_, &rayTracingFeatures);
   addOptionalExtension(
       VK_EXT_RAY_TRACING_INVOCATION_REORDER_EXTENSION_NAME, has_EXT_ray_tracing_invocation_reorder, &rayTracingInvocationReorderFeatures);

@@ -855,6 +855,9 @@ class VulkanContext final : public IContext {
   // queried (not chained by default) - only added to vkFeatures10_ when VK_EXT_fragment_density_map is supported
   VkPhysicalDeviceFragmentDensityMapFeaturesEXT vkFragmentDensityMapFeatures_ = {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_DENSITY_MAP_FEATURES_EXT};
+  // queried (not chained by default) - only added to vkFeatures10_ when VK_ARM_tensors / VK_ARM_data_graph are supported
+  VkPhysicalDeviceTensorFeaturesARM vkTensorFeatures_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM};
+  VkPhysicalDeviceDataGraphFeaturesARM vkDataGraphFeatures_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_FEATURES_ARM};
   // provided by Vulkan 1.4
   VkPhysicalDeviceVulkan14Properties vkPhysicalDeviceVulkan14Properties_ = {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES,
@@ -939,6 +942,8 @@ class VulkanContext final : public IContext {
   bool has_EXT_fragment_density_map2_ = false;
   bool has_EXT_host_image_copy_ = false; // promoted to Vulkan 1.4
   bool has_EXT_dynamic_rendering_unused_attachments_ = false;
+  bool has_ARM_tensors_ = false;
+  bool has_ARM_data_graph_ = false;
   // VK_EXT_host_image_copy
   bool hostImageCopyToShaderReadOnly_ = false; // SHADER_READ_ONLY_OPTIMAL is a usable copy destination
   bool hostImageCopyToGeneral_ = false; // GENERAL is a usable copy destination (for images which cannot be sampled)
