@@ -7751,7 +7751,6 @@ lvk::Result lvk::VulkanContext::createInstance() {
       if (hasAllLayers) {
         enabledLayers.insert(enabledLayers.begin(), std::begin(kMLEmulationLayers), std::end(kMLEmulationLayers));
         LLOGL("Arm ML Emulation Layer for Vulkan: enabled\n");
-        lvk::enableDebugObjectNames(false);
       } else {
         config_.enableMLEmulationLayer = false;
       }
