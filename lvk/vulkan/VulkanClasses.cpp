@@ -1556,6 +1556,17 @@ lvk::VulkanSwapchain::VulkanSwapchain(VulkanContext& ctx, uint32_t width, uint32
 }
 
 lvk::VulkanSwapchain::~VulkanSwapchain() {
+  if (ctx_.has_KHR_swapchain_maintenance1_ && !getNextImage_) {
+    // the image was acquired but never presented: give it back instead of letting it die with the swapchain
+    const VkReleaseSwapchainImagesInfoKHR info = {
+        .sType = VK_STRUCTURE_TYPE_RELEASE_SWAPCHAIN_IMAGES_INFO_KHR,
+        .swapchain = swapchain_,
+        .imageIndexCount = 1,
+        .pImageIndices = &currentImageIndex_,
+    };
+    VK_ASSERT(vkReleaseSwapchainImagesKHR(device_, &info));
+  }
+
   for (TextureHandle handle : swapchainTextures_) {
     ctx_.destroy(handle);
   }
@@ -8607,6 +8618,8 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     vkTransitionImageLayout = vkTransitionImageLayoutEXT;
   if (!vkCopyMemoryToImage)
     vkCopyMemoryToImage = vkCopyMemoryToImageEXT;
+  if (!vkReleaseSwapchainImagesKHR)
+    vkReleaseSwapchainImagesKHR = vkReleaseSwapchainImagesEXT;
 
   vkGetDeviceQueue(vkDevice_, deviceQueues_.graphicsQueueFamilyIndex, 0, &deviceQueues_.graphicsQueue);
   vkGetDeviceQueue(vkDevice_, deviceQueues_.computeQueueFamilyIndex, 0, &deviceQueues_.computeQueue);
@@ -8774,7 +8787,6 @@ lvk::Result lvk::VulkanContext::initSwapchain(uint32_t width, uint32_t height) {
 
   if (swapchain_) {
     // destroy the old swapchain first
-    // TODO: replace with VK_EXT_swapchain_maintenance1
     VK_ASSERT(vkDeviceWaitIdle(vkDevice_));
     // the guard fence belongs to the swapchain we are about to destroy
     immediate_->setLastPresentSemaphore(VK_NULL_HANDLE, VK_NULL_HANDLE);
