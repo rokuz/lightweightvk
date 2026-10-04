@@ -680,6 +680,12 @@ class VulkanContext final : public IContext {
     return vkFeatures10_.features.depthBounds == VK_TRUE;
   }
   bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags) const override;
+  bool supportsTensorsARM() const override {
+    return has_ARM_tensors_;
+  }
+  bool supportsDataGraphARM() const override {
+    return has_ARM_data_graph_;
+  }
   bool supportsShaderInterlock() const override {
     return has_EXT_fragment_shader_interlock_;
   }

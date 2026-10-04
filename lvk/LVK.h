@@ -1393,6 +1393,8 @@ class IContext {
   virtual bool supportsRayTracingPipeline() const = 0;
   virtual bool supportsShaderInterlock() const = 0;
   virtual bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags = TextureUsageBits_Sampled) const = 0;
+  virtual bool supportsTensorsARM() const = 0;
+  virtual bool supportsDataGraphARM() const = 0;
 
   // the maximum number of views in a multiview render pass, i.e. 1 unless multiview is supported
   [[nodiscard]] virtual uint32_t getMultiviewMaxViewCount() const = 0;
