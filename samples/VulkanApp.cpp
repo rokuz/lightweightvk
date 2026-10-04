@@ -874,7 +874,9 @@ void VulkanApp::drawFPS() {
 std::vector<uint8_t> VulkanApp::loadFile(const char* filePath) const {
 #if defined(ANDROID)
   if (tarReader_ && strncmp(filePath, tarBasePath_.c_str(), tarBasePath_.size()) == 0) {
-    const TarFileReader::FileData& fd = tarReader_->getFile(filePath + tarBasePath_.size());
+    // archive names are normalized, so `Exterior/../BuildingTextures/x.png` has to be collapsed first
+    const std::string name = std::filesystem::path(filePath).lexically_normal().generic_string();
+    const TarFileReader::FileData& fd = tarReader_->getFile(name.c_str() + tarBasePath_.size());
     if (fd.ptr)
       return std::vector<uint8_t>(fd.ptr, fd.ptr + fd.size);
   }
