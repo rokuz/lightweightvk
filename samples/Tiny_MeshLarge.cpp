@@ -2002,6 +2002,8 @@ double getCurrentTimestamp() {
 
 VULKAN_APP_MAIN {
   const VulkanAppConfig cfg{
+      .width = -100,
+      .height = -100,
       .resizable = true,
       .initialCameraPos = vec3(-100, 40, -47),
       .initialCameraTarget = vec3(0, 35, 0),
