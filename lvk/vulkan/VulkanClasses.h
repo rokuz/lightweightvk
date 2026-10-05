@@ -155,7 +155,6 @@ class VulkanSwapchain final {
   uint32_t height_ = 0;
   uint32_t numSwapchainImages_ = 0;
   uint32_t currentImageIndex_ = 0; // [0...numSwapchainImages_)
-  uint64_t currentFrameIndex_ = 0; // [0...+inf)
   bool getNextImage_ = true;
   VkSwapchainKHR swapchain_ = VK_NULL_HANDLE;
   VkSurfaceFormatKHR surfaceFormat_ = {.format = VK_FORMAT_UNDEFINED};
@@ -194,10 +193,8 @@ class VulkanImmediateCommands final {
   struct CommandBufferWrapper {
     VkCommandBuffer cmdBuf_ = VK_NULL_HANDLE;
     VkCommandBuffer cmdBufAllocated_ = VK_NULL_HANDLE;
-    SubmitHandle handle_ = {};
-    VkFence fence_ = VK_NULL_HANDLE;
     VkSemaphore semaphore_ = VK_NULL_HANDLE;
-    mutable uint64_t signaledTimelineValue_ = 0; // value signaled on submitTimelineSemaphore_ by this submission (cross-queue waits)
+    mutable uint64_t signaledTimelineValue_ = 0; // purge() recycles this slot once the timeline reaches this value
     mutable bool isEncoding_ = false;
   };
 
@@ -206,18 +203,15 @@ class VulkanImmediateCommands final {
   SubmitHandle submit(const CommandBufferWrapper& wrapper);
   void waitSemaphore(VkSemaphore semaphore);
   void waitTimelineSemaphore(VkSemaphore semaphore, uint64_t value);
-  void signalSemaphore(VkSemaphore semaphore, uint64_t signalValue);
   VkSemaphore acquireLastSubmitSemaphore();
   // timeline semaphore signaled by every submit() on this queue; lets another queue wait for a specific submission to complete
   const VkSemaphore& getTimelineSemaphore() const {
     return submitTimelineSemaphore_;
   }
-  uint64_t getTimelineValue(SubmitHandle handle) const;
   void setLastPresentSemaphore(VkSemaphore semaphore, VkFence presentFence);
-  VkFence getVkFence(SubmitHandle handle) const;
   SubmitHandle getLastSubmitHandle() const;
   SubmitHandle getNextSubmitHandle() const;
-  bool isReady(SubmitHandle handle, bool fastCheckNoVulkan = false) const;
+  bool isReady(SubmitHandle handle) const;
   void wait(SubmitHandle handle);
   void waitAll();
 
@@ -225,6 +219,7 @@ class VulkanImmediateCommands final {
   friend class lvk::VulkanContext;
 
   void purge();
+  uint64_t getLastKnownCompletedValue() const; // the highest timeline value the queue has finished executing
 
  private:
   VkDevice device_ = VK_NULL_HANDLE;
@@ -235,20 +230,18 @@ class VulkanImmediateCommands final {
   const char* debugName_ = "";
   CommandBufferWrapper buffers_[kMaxCommandBuffers];
   SubmitHandle lastSubmitHandle_ = SubmitHandle();
-  SubmitHandle nextSubmitHandle_ = SubmitHandle();
   VkSemaphoreSubmitInfo lastSubmitSemaphore_ = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                                 .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT};
   VkSemaphoreSubmitInfo waitSemaphore_ = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                           .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}; // extra "wait" semaphore
   VkSemaphoreSubmitInfo waitTimeline_ = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
                                          .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}; // timeline wait (cross-queue)
-  VkSemaphoreSubmitInfo signalSemaphore_ = {.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO,
-                                            .stageMask = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT}; // extra "signal" semaphore
   VkSemaphore lastPresentSemaphore_ = VK_NULL_HANDLE; // present-wait semaphore of the last vkQueuePresentKHR()
   VkFence lastPresentFence_ = VK_NULL_HANDLE; // its present fence; acquire() waits it before reusing that slot
   VkSemaphore submitTimelineSemaphore_ = VK_NULL_HANDLE; // monotonic timeline signaled by every submit() (cross-queue waits)
+  // the timeline only ever grows, so a submission known to be complete never has to be queried again
+  mutable uint64_t lastKnownCompletedValue_ = 0;
   uint32_t numAvailableCommandBuffers_ = kMaxCommandBuffers;
-  uint32_t submitCounter_ = 1;
 };
 
 // the properties of a "render pass" a VkPipeline is created for; the VkPipeline has to be recreated whenever they change
@@ -903,7 +896,6 @@ class VulkanContext final : public IContext {
  public:
   DeviceQueues deviceQueues_;
   std::unique_ptr<lvk::VulkanSwapchain> swapchain_;
-  VkSemaphore timelineSemaphore_ = VK_NULL_HANDLE;
   std::unique_ptr<lvk::VulkanImmediateCommands> immediate_;
   std::unique_ptr<lvk::VulkanImmediateCommands> immediateCompute_; // dedicated async-compute queue (optional)
   std::unique_ptr<lvk::VulkanStagingDevice> stagingDevice_;
