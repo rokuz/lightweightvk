@@ -34,6 +34,8 @@ Discord: https://discord.com/invite/bEyHyKCrvq
    * optional **VK_EXT_host_image_copy**
    * optional **VK_EXT_layer_settings**
    * optional **VK_EXT_mesh_shader**
+   * optional **VK_ARM_tensors**
+   * optional **VK_ARM_data_graph**
 
 ## Supported platforms
 
@@ -53,7 +55,7 @@ Discord: https://discord.com/invite/bEyHyKCrvq
 | VK_EXT_mesh_shader            | :heavy_check_mark:         | :heavy_check_mark:         |                            | :heavy_check_mark:         |
 | OpenXR 1.1                    | :heavy_check_mark:         |                            |                            |                            |
 
-On MacOS, `KosmicKrisp` and `VulkanSDK 1.4.357+` are required.
+On MacOS, `KosmicKrisp` and `VulkanSDK 1.4.363+` are required.
 
 ## Build
 
@@ -85,7 +87,7 @@ cmake .. -G "Unix Makefiles"
 
 ### MacOS
 
-:heavy_exclamation_mark: Be sure that `VulkanSDK 1.4.357+` for MacOS is installed https://vulkan.lunarg.com/sdk/home#mac
+:heavy_exclamation_mark: Be sure that `VulkanSDK 1.4.363+` for MacOS is installed https://vulkan.lunarg.com/sdk/home#mac
 
 ```
 cd build
