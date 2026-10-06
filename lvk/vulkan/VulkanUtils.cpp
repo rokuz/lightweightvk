@@ -1146,6 +1146,8 @@ lvk::Result lvk::compileShaderSlang(slang::IGlobalSession*& slangGlobalSession,
       return "intersectionMain";
     case Stage_Callable:
       return "callableMain";
+    case Stage_DataGraph:
+      return "graphMain";
     }
     return "unknown shader type";
   }();

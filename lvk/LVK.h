@@ -674,6 +674,8 @@ enum ShaderStage : uint8_t {
   Stage_Miss,
   Stage_Intersection,
   Stage_Callable,
+  // VK_ARM_data_graph
+  Stage_DataGraph,
 };
 
 union ClearColorValue {
