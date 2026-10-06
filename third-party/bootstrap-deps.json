@@ -36,7 +36,7 @@
     "source": {
         "type": "git",
         "url": "https://github.com/KhronosGroup/SPIRV-Reflect.git",
-        "revision": "vulkan-sdk-1.4.363.0"
+        "revision": "563dc9a16d0e86145e12a66bb61f0695ca4a14b9"
     }
 },
 {
