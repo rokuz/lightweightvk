@@ -1576,6 +1576,11 @@ StageAccess lvk::getPipelineStageAccess(VkImageLayout layout) {
         .stage = VK_PIPELINE_STAGE_2_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR,
         .access = VK_ACCESS_2_FRAGMENT_SHADING_RATE_ATTACHMENT_READ_BIT_KHR,
     };
+  case VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM:
+    return {
+        .stage = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT,
+        .access = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
+    };
   default:
     LVK_ASSERT_MSG(false, "Unsupported image layout transition!");
     return {
