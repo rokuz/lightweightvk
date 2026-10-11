@@ -4228,15 +4228,38 @@ void lvk::VulkanStagingDevice::imageData2D(VulkanImage& image,
             .imageOffset = {.x = region.offset.x, .y = region.offset.y, .z = 0},
             .imageExtent = {.width = region.extent.width, .height = region.extent.height, .depth = 1u},
         };
-        const VkCopyBufferToImageInfo2 copyInfo = {
-            .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
-            .srcBuffer = stagingBuffer->vkBuffer_,
-            .dstImage = image.vkImage_,
-            .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-            .regionCount = 1,
-            .pRegions = &copy,
-        };
-        vkCmdCopyBufferToImage2(wrapper.cmdBuf_, &copyInfo);
+        if (ctx_.has_KHR_device_address_commands_) {
+          // vkCmdCopyBufferToImage2() is a legacy command when VK_KHR_device_address_commands is enabled
+          const VkDeviceMemoryImageCopyKHR memoryCopy = {
+              .sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_IMAGE_COPY_KHR,
+              .addressRange = {.address = stagingBuffer->vkDeviceAddress_ + copy.bufferOffset,
+                               .size = stagingBufferSize_ - copy.bufferOffset},
+              .addressFlags = stagingBuffer->getVkAddressCommandFlags(),
+              .addressRowLength = copy.bufferRowLength,
+              .addressImageHeight = copy.bufferImageHeight,
+              .imageSubresource = copy.imageSubresource,
+              .imageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              .imageOffset = copy.imageOffset,
+              .imageExtent = copy.imageExtent,
+          };
+          const VkCopyDeviceMemoryImageInfoKHR copyInfo = {
+              .sType = VK_STRUCTURE_TYPE_COPY_DEVICE_MEMORY_IMAGE_INFO_KHR,
+              .image = image.vkImage_,
+              .regionCount = 1,
+              .pRegions = &memoryCopy,
+          };
+          vkCmdCopyMemoryToImageKHR(wrapper.cmdBuf_, &copyInfo);
+        } else {
+          const VkCopyBufferToImageInfo2 copyInfo = {
+              .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+              .srcBuffer = stagingBuffer->vkBuffer_,
+              .dstImage = image.vkImage_,
+              .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+              .regionCount = 1,
+              .pRegions = &copy,
+          };
+          vkCmdCopyBufferToImage2(wrapper.cmdBuf_, &copyInfo);
+        }
         planeOffset += lvk::getTextureBytesPerPlane(imageRegion.extent.width, imageRegion.extent.height, vkFormatToFormat(format), plane);
       }
 
@@ -4320,15 +4343,35 @@ void lvk::VulkanStagingDevice::imageData3D(VulkanImage& image,
         .imageOffset = {offset.x, offset.y, (int32_t)currentZ},
         .imageExtent = {extent.width, extent.height, batchSlices},
     };
-    const VkCopyBufferToImageInfo2 copyInfo = {
-        .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
-        .srcBuffer = stagingBuffer->vkBuffer_,
-        .dstImage = image.vkImage_,
-        .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-        .regionCount = 1,
-        .pRegions = &copy,
-    };
-    vkCmdCopyBufferToImage2(wrapper.cmdBuf_, &copyInfo);
+    if (ctx_.has_KHR_device_address_commands_) {
+      // vkCmdCopyBufferToImage2() is a legacy command when VK_KHR_device_address_commands is enabled
+      const VkDeviceMemoryImageCopyKHR memoryCopy = {
+          .sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_IMAGE_COPY_KHR,
+          .addressRange = {.address = stagingBuffer->vkDeviceAddress_ + copy.bufferOffset, .size = stagingBufferSize_ - copy.bufferOffset},
+          .addressFlags = stagingBuffer->getVkAddressCommandFlags(),
+          .imageSubresource = copy.imageSubresource,
+          .imageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          .imageOffset = copy.imageOffset,
+          .imageExtent = copy.imageExtent,
+      };
+      const VkCopyDeviceMemoryImageInfoKHR copyInfo = {
+          .sType = VK_STRUCTURE_TYPE_COPY_DEVICE_MEMORY_IMAGE_INFO_KHR,
+          .image = image.vkImage_,
+          .regionCount = 1,
+          .pRegions = &memoryCopy,
+      };
+      vkCmdCopyMemoryToImageKHR(wrapper.cmdBuf_, &copyInfo);
+    } else {
+      const VkCopyBufferToImageInfo2 copyInfo = {
+          .sType = VK_STRUCTURE_TYPE_COPY_BUFFER_TO_IMAGE_INFO_2,
+          .srcBuffer = stagingBuffer->vkBuffer_,
+          .dstImage = image.vkImage_,
+          .dstImageLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          .regionCount = 1,
+          .pRegions = &copy,
+      };
+      vkCmdCopyBufferToImage2(wrapper.cmdBuf_, &copyInfo);
+    }
 
     // last batch: transition the whole image out of TRANSFER_DST_OPTIMAL
     if (remainingSlices == batchSlices) {
@@ -4481,7 +4524,8 @@ void lvk::VulkanStagingDevice::ensureStagingBufferSize(VkDeviceSize sizeNeeded) 
 
   stagingBuffer_ = {&ctx_,
                     ctx_.createBuffer(stagingBufferSize_,
-                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                      VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                                          VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
                                       nullptr,
                                       debugName)};
