@@ -3239,7 +3239,16 @@ void lvk::CommandBuffer::cmdFillBuffer(BufferHandle buffer, size_t bufferOffset,
 
   bufferBarrier(buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
 
-  vkCmdFillBuffer(wrapper_->cmdBuf_, buf->vkBuffer_, bufferOffset, size, data);
+  if (ctx_->has_KHR_device_address_commands_ && buf->vkDeviceAddress_) {
+    // vkCmdFillBuffer() is a legacy command when VK_KHR_device_address_commands is enabled
+    const VkDeviceAddressRangeKHR range = {
+        .address = buf->vkDeviceAddress_ + bufferOffset,
+        .size = size == VK_WHOLE_SIZE ? (buf->bufferSize_ - bufferOffset) & ~VkDeviceSize(3) : size,
+    };
+    vkCmdFillMemoryKHR(wrapper_->cmdBuf_, &range, buf->getVkAddressCommandFlags(), data);
+  } else {
+    vkCmdFillBuffer(wrapper_->cmdBuf_, buf->vkBuffer_, bufferOffset, size, data);
+  }
 
   VkPipelineStageFlags2 dstStage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
 
