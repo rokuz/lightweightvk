@@ -9052,7 +9052,8 @@ lvk::BufferHandle lvk::VulkanContext::createBuffer(VkDeviceSize bufferSize,
     }
 
     vmaAllocInfo.usage = VMA_MEMORY_USAGE_AUTO;
-    vmaAllocInfo.minAlignment = 16;
+    // VUID-vkCmdBuildAccelerationStructuresKHR-micromap-11552: opacity micromap build inputs must be 128-byte aligned
+    vmaAllocInfo.minAlignment = (usageFlags & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR) ? 128 : 16;
 
     vmaCreateBuffer((VmaAllocator)getVmaAllocator(), &ci, &vmaAllocInfo, &buf.vkBuffer_, &buf.vmaAllocation_, nullptr);
 
