@@ -35,6 +35,12 @@ struct VulkanBuffer final {
   [[nodiscard]] inline bool isMapped() const { return mappedPtr_ != nullptr;  }
   // clang-format on
 
+  // VK_KHR_device_address_commands: the storage usage of a buffer must be declared in its address flags
+  [[nodiscard]] inline VkAddressCommandFlagsKHR getVkAddressCommandFlags() const {
+    return VK_ADDRESS_COMMAND_FULLY_BOUND_BIT_KHR |
+           ((vkUsageFlags_ & VK_BUFFER_USAGE_STORAGE_BUFFER_BIT) ? VK_ADDRESS_COMMAND_STORAGE_BUFFER_USAGE_BIT_KHR : 0);
+  }
+
   void bufferSubData(const VulkanContext& ctx, size_t offset, size_t size, const void* data);
   void getBufferSubData(const VulkanContext& ctx, size_t offset, size_t size, void* data);
   void flushMappedMemory(const VulkanContext& ctx, VkDeviceSize offset, VkDeviceSize size) const;
