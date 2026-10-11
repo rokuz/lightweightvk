@@ -4468,15 +4468,37 @@ void lvk::VulkanStagingDevice::getImageData(VulkanImage& image,
       .imageOffset = offset,
       .imageExtent = extent,
   };
-  const VkCopyImageToBufferInfo2 copyInfo = {
-      .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
-      .srcImage = image.vkImage_,
-      .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-      .dstBuffer = stagingBuffer->vkBuffer_,
-      .regionCount = 1,
-      .pRegions = &copy,
-  };
-  vkCmdCopyImageToBuffer2(wrapper1.cmdBuf_, &copyInfo);
+  if (ctx_.has_KHR_device_address_commands_) {
+    // vkCmdCopyImageToBuffer2() is a legacy command when VK_KHR_device_address_commands is enabled
+    const VkDeviceMemoryImageCopyKHR memoryCopy = {
+        .sType = VK_STRUCTURE_TYPE_DEVICE_MEMORY_IMAGE_COPY_KHR,
+        .addressRange = {.address = stagingBuffer->vkDeviceAddress_ + copy.bufferOffset, .size = stagingBufferSize_ - copy.bufferOffset},
+        .addressFlags = stagingBuffer->getVkAddressCommandFlags(),
+        .addressRowLength = copy.bufferRowLength,
+        .addressImageHeight = copy.bufferImageHeight,
+        .imageSubresource = copy.imageSubresource,
+        .imageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .imageOffset = copy.imageOffset,
+        .imageExtent = copy.imageExtent,
+    };
+    const VkCopyDeviceMemoryImageInfoKHR copyInfo = {
+        .sType = VK_STRUCTURE_TYPE_COPY_DEVICE_MEMORY_IMAGE_INFO_KHR,
+        .image = image.vkImage_,
+        .regionCount = 1,
+        .pRegions = &memoryCopy,
+    };
+    vkCmdCopyImageToMemoryKHR(wrapper1.cmdBuf_, &copyInfo);
+  } else {
+    const VkCopyImageToBufferInfo2 copyInfo = {
+        .sType = VK_STRUCTURE_TYPE_COPY_IMAGE_TO_BUFFER_INFO_2,
+        .srcImage = image.vkImage_,
+        .srcImageLayout = VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+        .dstBuffer = stagingBuffer->vkBuffer_,
+        .regionCount = 1,
+        .pRegions = &copy,
+    };
+    vkCmdCopyImageToBuffer2(wrapper1.cmdBuf_, &copyInfo);
+  }
 
   desc.handle_ = ctx_.immediate_->submit(wrapper1);
   insertRegion(desc);
