@@ -5676,13 +5676,25 @@ lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& des
   // must not point to the stack; cmdUpdateBLAS() re-links it
   accelStruct.geometry.geometry.triangles.pNext = nullptr;
 
-  const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
-      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
-      .buffer = getVkBuffer(this, accelStruct.buffer),
-      .size = accelerationStructureBuildSizesInfo.accelerationStructureSize,
-      .type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
-  };
-  VK_ASSERT(vkCreateAccelerationStructureKHR(vkDevice_, &ciAccelerationStructure, nullptr, &accelStruct.vkHandle));
+  if (has_KHR_device_address_commands_) {
+    // vkCreateAccelerationStructureKHR() is a legacy command when VK_KHR_device_address_commands is enabled
+    const lvk::VulkanBuffer* buf = buffersPool_.get(accelStruct.buffer);
+    const VkAccelerationStructureCreateInfo2KHR ciAccelerationStructure = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_2_KHR,
+        .addressRange = {.address = buf->vkDeviceAddress_, .size = accelerationStructureBuildSizesInfo.accelerationStructureSize},
+        .addressFlags = buf->getVkAddressCommandFlags(),
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+    };
+    VK_ASSERT(vkCreateAccelerationStructure2KHR(vkDevice_, &ciAccelerationStructure, nullptr, &accelStruct.vkHandle));
+  } else {
+    const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+        .buffer = getVkBuffer(this, accelStruct.buffer),
+        .size = accelerationStructureBuildSizesInfo.accelerationStructureSize,
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
+    };
+    VK_ASSERT(vkCreateAccelerationStructureKHR(vkDevice_, &ciAccelerationStructure, nullptr, &accelStruct.vkHandle));
+  }
 
   if (!LVK_VERIFY(accelStruct.vkHandle)) {
     Result::setResult(outResult, Result::Code::RuntimeError, "Cannot create VkAccelerationStructureKHR");
@@ -5842,13 +5854,25 @@ lvk::AccelStructHandle lvk::VulkanContext::createTLAS(const AccelStructDesc& des
           outResult),
   };
 
-  const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
-      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
-      .buffer = getVkBuffer(this, accelStruct.buffer),
-      .size = accelerationStructureBuildSizesInfo.accelerationStructureSize,
-      .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-  };
-  VK_ASSERT(vkCreateAccelerationStructureKHR(vkDevice_, &ciAccelerationStructure, nullptr, &accelStruct.vkHandle));
+  if (has_KHR_device_address_commands_) {
+    // vkCreateAccelerationStructureKHR() is a legacy command when VK_KHR_device_address_commands is enabled
+    const lvk::VulkanBuffer* buf = buffersPool_.get(accelStruct.buffer);
+    const VkAccelerationStructureCreateInfo2KHR ciAccelerationStructure = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_2_KHR,
+        .addressRange = {.address = buf->vkDeviceAddress_, .size = accelerationStructureBuildSizesInfo.accelerationStructureSize},
+        .addressFlags = buf->getVkAddressCommandFlags(),
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+    };
+    VK_ASSERT(vkCreateAccelerationStructure2KHR(vkDevice_, &ciAccelerationStructure, nullptr, &accelStruct.vkHandle));
+  } else {
+    const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+        .buffer = getVkBuffer(this, accelStruct.buffer),
+        .size = accelerationStructureBuildSizesInfo.accelerationStructureSize,
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+    };
+    VK_ASSERT(vkCreateAccelerationStructureKHR(vkDevice_, &ciAccelerationStructure, nullptr, &accelStruct.vkHandle));
+  }
 
   if (!LVK_VERIFY(accelStruct.vkHandle)) {
     Result::setResult(outResult, Result::Code::RuntimeError, "Cannot create VkAccelerationStructureKHR");
@@ -9505,13 +9529,25 @@ void lvk::VulkanContext::createDummyTLAS() {
     return;
   }
 
-  const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
-      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
-      .buffer = getVkBuffer(this, buffer),
-      .size = kDummyTLASSize,
-      .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
-  };
-  VK_ASSERT(vkCreateAccelerationStructureKHR(vkDevice_, &ciAccelerationStructure, nullptr, &dummyTLAS_));
+  if (has_KHR_device_address_commands_) {
+    // vkCreateAccelerationStructureKHR() is a legacy command when VK_KHR_device_address_commands is enabled
+    const lvk::VulkanBuffer* buf = buffersPool_.get(buffer);
+    const VkAccelerationStructureCreateInfo2KHR ciAccelerationStructure = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_2_KHR,
+        .addressRange = {.address = buf->vkDeviceAddress_, .size = kDummyTLASSize},
+        .addressFlags = buf->getVkAddressCommandFlags(),
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+    };
+    VK_ASSERT(vkCreateAccelerationStructure2KHR(vkDevice_, &ciAccelerationStructure, nullptr, &dummyTLAS_));
+  } else {
+    const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
+        .buffer = getVkBuffer(this, buffer),
+        .size = kDummyTLASSize,
+        .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
+    };
+    VK_ASSERT(vkCreateAccelerationStructureKHR(vkDevice_, &ciAccelerationStructure, nullptr, &dummyTLAS_));
+  }
 
   if (LVK_VERIFY(dummyTLAS_)) {
     dummyTLASBuffer_ = buffer.release();
