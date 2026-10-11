@@ -3333,7 +3333,13 @@ void lvk::CommandBuffer::cmdUpdateBuffer(BufferHandle buffer, size_t bufferOffse
 
   bufferBarrier(buffer, VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_2_TRANSFER_BIT);
 
-  vkCmdUpdateBuffer(wrapper_->cmdBuf_, buf->vkBuffer_, bufferOffset, size, data);
+  if (ctx_->has_KHR_device_address_commands_ && buf->vkDeviceAddress_) {
+    // vkCmdUpdateBuffer() is a legacy command when VK_KHR_device_address_commands is enabled
+    const VkDeviceAddressRangeKHR range = {.address = buf->vkDeviceAddress_ + bufferOffset, .size = size};
+    vkCmdUpdateMemoryKHR(wrapper_->cmdBuf_, &range, buf->getVkAddressCommandFlags(), size, data);
+  } else {
+    vkCmdUpdateBuffer(wrapper_->cmdBuf_, buf->vkBuffer_, bufferOffset, size, data);
+  }
 
   VkPipelineStageFlags2 dstStage = VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT;
 
