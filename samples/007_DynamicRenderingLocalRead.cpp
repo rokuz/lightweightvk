@@ -461,7 +461,7 @@ VULKAN_APP_MAIN {
 
     lvk::Holder<lvk::TextureHandle> texWorldPos = ctx->createTexture({
         .type = lvk::TextureType_2D,
-        .format = lvk::Format_BGRA_UN8,
+        .format = lvk::Format_RGBA_F16, // world positions are signed and not limited to [0, 1]
         .dimensions = dim,
         .usage = lvk::TextureUsageBits_Sampled | lvk::TextureUsageBits_Attachment | lvk::TextureUsageBits_InputAttachment,
         .debugName = "WorldPositions",
