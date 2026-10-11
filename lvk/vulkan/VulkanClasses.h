@@ -688,6 +688,9 @@ class VulkanContext final : public IContext {
   bool supportsRayTracingPipeline() const override {
     return has_KHR_acceleration_structure_ && has_KHR_ray_tracing_pipeline_;
   }
+  bool supportsOpacityMicromap() const override {
+    return has_KHR_acceleration_structure_ && has_KHR_opacity_micromap_;
+  }
   bool supportsMeshShader() const override {
     return has_EXT_mesh_shader_;
   }
@@ -864,6 +867,9 @@ class VulkanContext final : public IContext {
   // queried (not chained by default) - only added to vkFeatures10_ when VK_ARM_tensors / VK_ARM_data_graph are supported
   VkPhysicalDeviceTensorFeaturesARM vkTensorFeatures_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM};
   VkPhysicalDeviceDataGraphFeaturesARM vkDataGraphFeatures_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_FEATURES_ARM};
+  // only queried when VK_KHR_opacity_micromap is supported
+  VkPhysicalDeviceOpacityMicromapPropertiesKHR opacityMicromapProperties_ = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_PROPERTIES_KHR};
   // provided by Vulkan 1.4
   VkPhysicalDeviceVulkan14Properties vkPhysicalDeviceVulkan14Properties_ = {
       VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_PROPERTIES,
@@ -928,6 +934,7 @@ class VulkanContext final : public IContext {
   bool has_KHR_ray_query_ = false;
   bool has_KHR_ray_tracing_pipeline_ = false;
   bool has_KHR_device_address_commands_ = false;
+  bool has_KHR_opacity_micromap_ = false; // requires VK_KHR_device_address_commands
   bool has_EXT_ray_tracing_invocation_reorder = false;
   bool has_8BitIndices_ = false; // VK_KHR_index_type_uint8 or VK_EXT_index_type_uint8
   bool has_KHR_calibrated_timestamps_ = false;

@@ -7985,6 +7985,9 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     vkDataGraphFeatures_.pNext = vkFeatures10_.pNext;
     vkFeatures10_.pNext = &vkDataGraphFeatures_;
   }
+  if (hasExtension(VK_KHR_OPACITY_MICROMAP_EXTENSION_NAME, allDeviceExtensions)) {
+    addNextPhysicalDeviceProperties(&opacityMicromapProperties_);
+  }
 
   if (config_.vulkanVersion >= VulkanVersion_1_4) {
     addNextPhysicalDeviceProperties(&vkPhysicalDeviceVulkan14Properties_);
@@ -8193,6 +8196,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_QUERY_FEATURES_KHR,
       .rayQuery = VK_TRUE,
   };
+  VkPhysicalDeviceOpacityMicromapFeaturesKHR opacityMicromapFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_FEATURES_KHR,
+      .micromap = VK_TRUE,
+  };
   VkPhysicalDeviceDeviceAddressCommandsFeaturesKHR deviceAddressCommandsFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DEVICE_ADDRESS_COMMANDS_FEATURES_KHR,
       .deviceAddressCommands = VK_TRUE,
@@ -8349,6 +8356,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
                         &accelerationStructureFeatures);
   addOptionalExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, has_KHR_ray_query_, &rayQueryFeatures);
   addOptionalExtension(VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME, has_KHR_device_address_commands_, &deviceAddressCommandsFeatures);
+  if (has_KHR_acceleration_structure_ && has_KHR_device_address_commands_) {
+    // opacity micromaps only be created with vkCreateAccelerationStructure2KHR()
+    addOptionalExtension(VK_KHR_OPACITY_MICROMAP_EXTENSION_NAME, has_KHR_opacity_micromap_, &opacityMicromapFeatures);
+  }
   // only ask for the feature bits the device reports, otherwise vkCreateDevice() fails
   if (vkTensorFeatures_.tensors && vkTensorFeatures_.shaderTensorAccess) {
     addOptionalExtension(VK_ARM_TENSORS_EXTENSION_NAME, has_ARM_tensors_, &tensorFeatures);
