@@ -403,7 +403,6 @@ struct VulkanTensor final {
   // clang-format off
   [[nodiscard]] inline bool isMapped() const { return mappedPtr_ != nullptr; }
   [[nodiscard]] inline bool isLinear() const { return vkTiling_ == VK_TENSOR_TILING_LINEAR_ARM; }
-  [[nodiscard]] inline bool isShaderTensor() const { return (vkUsageFlags_ & VK_TENSOR_USAGE_SHADER_BIT_ARM) > 0; }
   // clang-format on
 
   VkTensorARM vkTensor_ = VK_NULL_HANDLE;
@@ -425,6 +424,9 @@ struct VulkanTensor final {
   void* mappedPtr_ = nullptr;
   bool isCoherentMemory_ = false;
   TextureHandle aliasTexture_;
+  BufferHandle aliasBuffer_;
+  uint64_t aliasBufferOffset_ = 0;
+  TensorHandle optimalTensor_;
 };
 
 struct DataGraphPipelineState final {
@@ -685,6 +687,15 @@ class VulkanContext final : public IContext {
 
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult) override;
   Holder<TensorHandle> createTensor(const TensorDesc& desc, const char* debugName, Result* outResult) override;
+  Holder<TensorHandle> createBufferAliasingTensor(BufferHandle buffer,
+                                                  uint64_t bufferOffset,
+                                                  const TensorDesc& desc,
+                                                  const char* debugName,
+                                                  Result* outResult) override;
+  Holder<TensorHandle> createTextureAliasingTensor(TextureHandle texture,
+                                                   const TensorDesc& desc,
+                                                   const char* debugName,
+                                                   Result* outResult) override;
   Holder<DataGraphPipelineHandle> createDataGraphPipeline(const DataGraphPipelineDesc& desc, Result* outResult) override;
 
   void destroy(ComputePipelineHandle handle) override;
@@ -711,10 +722,6 @@ class VulkanContext final : public IContext {
 
   Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override;
   Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) override;
-  Holder<TextureHandle> createTextureAliasingTensor(TensorHandle tensor,
-                                                    const TextureDesc& desc,
-                                                    const char* debugName,
-                                                    Result* outResult) override;
   Result upload(TensorHandle handle, const void* data, size_t size, size_t offset) override;
   Result download(TensorHandle handle, void* data, size_t size, size_t offset) override;
   uint8_t* getMappedPtr(TensorHandle handle) const override;
@@ -865,7 +872,6 @@ class VulkanContext final : public IContext {
     uint32_t maxTextures = 0;
     uint32_t maxSamplers = 0;
     uint32_t maxAccelStructs = 0;
-    uint32_t maxTensors = 0;
     VkDescriptorSetLayout vkDSL = VK_NULL_HANDLE;
     VkDescriptorPool vkDPool = VK_NULL_HANDLE;
     VkDescriptorSet vkDSet = VK_NULL_HANDLE;
@@ -880,15 +886,20 @@ class VulkanContext final : public IContext {
   void processDeferredTasks() const;
   void waitDeferredTasks();
   void generateMipmap(TextureHandle handle) const;
-  lvk::Result growDescriptorPool(VulkanContext::DescriptorSet& dset,
-                                 uint32_t maxTextures,
-                                 uint32_t maxSamplers,
-                                 uint32_t maxAccelStructs,
-                                 uint32_t maxTensors);
+  lvk::Result growDescriptorPool(VulkanContext::DescriptorSet& dset, uint32_t maxTextures, uint32_t maxSamplers, uint32_t maxAccelStructs);
   TensorHandle createTensor(const VkTensorDescriptionARM& description,
                             VkMemoryPropertyFlags memFlags,
                             const char* debugName,
-                            Result* outResult);
+                            Result* outResult,
+                            BufferHandle aliasBuffer = {},
+                            uint64_t aliasOffset = 0,
+                            TextureHandle aliasTexture = {});
+  Holder<TensorHandle> createTensorImpl(const TensorDesc& desc,
+                                        const char* debugName,
+                                        Result* outResult,
+                                        BufferHandle aliasBuffer,
+                                        uint64_t aliasOffset,
+                                        TextureHandle aliasTexture);
   VkDescriptorSet getTensorDescriptorSet(DataGraphPipelineState& state, const ldr::Span<const TensorHandle>& tensors);
   void destroyDataGraphPipelineState(DataGraphPipelineState& state);
   ShaderModuleState createShaderModuleFromSPIRV(const void* spirv,
@@ -896,7 +907,6 @@ class VulkanContext final : public IContext {
                                                 const char* debugName,
                                                 Result* outResult,
                                                 bool reflect = true) const;
-  Holder<TextureHandle> createTextureImpl(const TextureDesc& desc, const char* debugName, Result* outResult, TensorHandle aliasTensor);
   ShaderModuleState createShaderModuleFromGLSL(ShaderStage stage,
                                                const char* source,
                                                bool optimizeSPIRV,
@@ -1059,8 +1069,6 @@ class VulkanContext final : public IContext {
   bool has_EXT_dynamic_rendering_unused_attachments_ = false;
   bool has_ARM_tensors_ = false;
   bool has_ARM_data_graph_ = false;
-  VkShaderStageFlags tensorShaderStages_ = 0;
-  uint32_t maxBindlessTensors_ = 0;
   // VK_EXT_host_image_copy
   bool hostImageCopyToShaderReadOnly_ = false; // SHADER_READ_ONLY_OPTIMAL is a usable copy destination
   bool hostImageCopyToGeneral_ = false; // GENERAL is a usable copy destination (for images which cannot be sampled)
@@ -1074,7 +1082,6 @@ class VulkanContext final : public IContext {
   // BLAS and empty slots of `kBinding_AccelerationStructures` need a valid TLAS too
   BufferHandle dummyTLASBuffer_;
   VkAccelerationStructureKHR dummyTLAS_ = VK_NULL_HANDLE;
-  TensorHandle dummyTensor_;
 
   ldr::Pool<lvk::ShaderModule, lvk::ShaderModuleState> shaderModulesPool_;
   ldr::Pool<lvk::RenderPipeline, lvk::RenderPipelineState> renderPipelinesPool_;

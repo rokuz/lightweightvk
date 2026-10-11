@@ -290,7 +290,7 @@
     "source": {
         "type": "git",
         "url": "https://github.com/rokuz/neural-graphics-sdk-for-game-engines.git",
-        "revision": "c170de237fe4649b319ebe850fb1e46a4d29bed8",
+        "revision": "84c9e660900691a1602047c00a5dd9d8fc94ef13",
         "recursive": false
     }
 },

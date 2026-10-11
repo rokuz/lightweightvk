@@ -253,16 +253,14 @@ layout(push_constant) uniform constants {
   Nearest nearest;
   uvec2 slots;
   uvec2 counter;
+  uvec2 tensorInput;
+  uvec2 tensorOutput;
   uint texSum;
   uint texAccumulated;
   uint texCount;
   uint imageOut;
-  uint tensorInput;
-  uint tensorOutput;
   uint viewWidth;
   uint viewHeight;
-  uint tensorWidth;
-  uint tensorHeight;
 } pc;
 
 void main() {
@@ -372,21 +370,23 @@ layout(std430, buffer_reference) buffer Counter {
   uint value[];
 };
 
+layout(std430, buffer_reference) buffer TensorBytes {
+  int8_t value[];
+};
+
 layout(push_constant) uniform constants {
   vec4 background;
   Nearest nearest;
   Slots slots;
   Counter counter;
+  TensorBytes tensorInput;
+  TensorBytes tensorOutput;
   uint texSum;
   uint texAccumulated;
   uint texCount;
   uint imageOut;
-  uint tensorInput;
-  uint tensorOutput;
   uint viewWidth;
   uint viewHeight;
-  uint tensorWidth;
-  uint tensorHeight;
 } pc;
 
 const uint kNoSlot = 0xFFFFFFFFu;
@@ -447,6 +447,11 @@ Pixel loadPixel(ivec2 coord) {
 }
 )";
 
+const char* kCodeDfaoitExtensions = R"(
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
+)";
+
 const char* kCodeDfaoitPackCS = R"(
 shared uint sGroupCount;
 shared uint sGroupBase;
@@ -478,13 +483,11 @@ void main() {
 
   if (wanted) {
     const uint candidate = sGroupBase + local;
-    if (candidate < pc.tensorWidth * pc.tensorHeight) {
+    if (candidate < kDfaoitTensorWidth * kDfaoitTensorHeight) {
       slot = candidate;
-      int8_t quantized[kDfaoitNumInputs];
       for (uint i = 0u; i != kDfaoitNumInputs; i++) {
-        quantized[i] = int8_t(clamp(int(round(p.inputs[i] * 255.0)) - 128, -128, 127));
+        pc.tensorInput.value[slot * kDfaoitNumInputs + i] = int8_t(clamp(int(round(p.inputs[i] * 255.0)) - 128, -128, 127));
       }
-      tensorWriteARM(kTensorsI8_4[pc.tensorInput], uint[](0, slot / pc.tensorWidth, slot % pc.tensorWidth, 0), quantized);
     }
   }
 
@@ -508,9 +511,9 @@ void main() {
   if (p.count > kDfaoitNumNearest) {
     const uint slot = pc.slots.value[uint(coord.y) * pc.viewWidth + uint(coord.x)];
     if (slot != kNoSlot) {
-      int8_t outputs[kDfaoitNumOutputs];
-      tensorReadARM(kTensorsI8_4[pc.tensorOutput], uint[](0, slot / pc.tensorWidth, slot % pc.tensorWidth, 0), outputs);
-      color += p.attenuation * (vec3(outputs[0], outputs[1], outputs[2]) + 128.0) / 255.0;
+      const uint base = slot * kDfaoitNumOutputs;
+      const vec3 outputs = vec3(pc.tensorOutput.value[base], pc.tensorOutput.value[base + 1u], pc.tensorOutput.value[base + 2u]);
+      color += p.attenuation * (outputs + 128.0) / 255.0;
     } else {
       const float coverage = 1.0 - pow(1.0 - p.inputs[0], float(p.count - kDfaoitNumNearest));
       color += p.attenuation * coverage * vec3(p.inputs[1], p.inputs[2], p.inputs[3]);
@@ -653,17 +656,16 @@ struct DfaoitPushConstants {
   uint64_t nearest;
   uint64_t slots;
   uint64_t counter;
+  uint64_t tensorInput;
+  uint64_t tensorOutput;
   uint32_t texSum;
   uint32_t texAccumulated;
   uint32_t texCount;
   uint32_t imageOut;
-  uint32_t tensorInput;
-  uint32_t tensorOutput;
   uint32_t viewWidth;
   uint32_t viewHeight;
-  uint32_t tensorWidth;
-  uint32_t tensorHeight;
 };
+static_assert(sizeof(DfaoitPushConstants) == 80);
 
 struct ErrorPushConstants {
   uint64_t rows;
@@ -845,10 +847,12 @@ VULKAN_APP_MAIN {
   const std::string network = hasNetwork ? nearest + "const uint kDfaoitNumInputs = " + std::to_string(layerSizes[0]) + ";\n" +
                                                "const uint kDfaoitNumHidden1 = " + std::to_string(layerSizes[1]) + ";\n" +
                                                "const uint kDfaoitNumHidden2 = " + std::to_string(layerSizes[2]) + ";\n" +
-                                               "const uint kDfaoitNumOutputs = " + std::to_string(layerSizes[3]) + ";\n"
+                                               "const uint kDfaoitNumOutputs = " + std::to_string(layerSizes[3]) + ";\n" +
+                                               "const uint kDfaoitTensorWidth = " + std::to_string(kTensorWidth) + ";\n" +
+                                               "const uint kDfaoitTensorHeight = " + std::to_string(kTensorHeight) + ";\n"
                                          : std::string();
-  const std::string codeResolveCS = network + kCodeDfaoitCommon + kCodeDfaoitResolveCS;
-  const std::string codePackCS = network + kCodeDfaoitCommon + kCodeDfaoitPackCS;
+  const std::string codeResolveCS = kCodeDfaoitExtensions + network + kCodeDfaoitCommon + kCodeDfaoitResolveCS;
+  const std::string codePackCS = kCodeDfaoitExtensions + network + kCodeDfaoitCommon + kCodeDfaoitPackCS;
 
   lvk::Holder<lvk::ShaderModuleHandle> smMeshVert = ctx->createShaderModule({kCodeMeshVS, lvk::Stage_Vert, "Shader Module: mesh (vert)"});
   lvk::Holder<lvk::ShaderModuleHandle> smABufferFrag =
@@ -1001,6 +1005,8 @@ VULKAN_APP_MAIN {
   lvk::Holder<lvk::BufferHandle> slotsBuffer;
   lvk::Holder<lvk::BufferHandle> counterBuffer;
   lvk::Holder<lvk::BufferHandle> rowSums;
+  lvk::Holder<lvk::BufferHandle> tensorInputBuffer;
+  lvk::Holder<lvk::BufferHandle> tensorOutputBuffer;
   lvk::Holder<lvk::TensorHandle> tensorInput;
   lvk::Holder<lvk::TensorHandle> tensorOutput;
   lvk::Holder<lvk::DataGraphPipelineHandle> pipelineGraph;
@@ -1011,7 +1017,6 @@ VULKAN_APP_MAIN {
   bool graphReady = false;
 
   if (hasDataGraph) {
-    const uint8_t usage = lvk::TensorUsageBits_Shader | lvk::TensorUsageBits_DataGraph;
     const int64_t dimsInput[] = {1, kTensorHeight, kTensorWidth, layerSizes.front()};
     const int64_t dimsOutput[] = {1, kTensorHeight, kTensorWidth, layerSizes.back()};
     lvk::Result result;
@@ -1020,12 +1025,28 @@ VULKAN_APP_MAIN {
         !vgf.getOutput(0).matches(dimsOutput)) {
       LLOGW("`%s` is not shaped for %ux%u\n", modelFileName, kTensorWidth, kTensorHeight);
     } else {
-      tensorInput = ctx->createTensor(vgf.getInput(0).toTensorDesc(usage), "DFAOIT: input tensor", &result);
+      const lvk::TensorDesc descInput = vgf.getInput(0).toTensorDesc();
+      const lvk::TensorDesc descOutput = vgf.getOutput(0).toTensorDesc();
+      tensorInputBuffer = ctx->createBuffer({
+          .usage = lvk::BufferUsageBits_Storage,
+          .storage = lvk::StorageType_Device,
+          .size = lvk::getTensorDataSize(descInput),
+          .debugName = "Buffer: DFAOIT input tensor",
+      });
+      tensorOutputBuffer = ctx->createBuffer({
+          .usage = lvk::BufferUsageBits_Storage,
+          .storage = lvk::StorageType_Device,
+          .size = lvk::getTensorDataSize(descOutput),
+          .debugName = "Buffer: DFAOIT output tensor",
+      });
+      tensorInput = ctx->createBufferAliasingTensor(tensorInputBuffer, 0, descInput, "DFAOIT: input tensor", &result);
       if (result.isOk()) {
-        tensorOutput = ctx->createTensor(vgf.getOutput(0).toTensorDesc(usage), "DFAOIT: output tensor", &result);
+        tensorOutput = ctx->createBufferAliasingTensor(tensorOutputBuffer, 0, descOutput, "DFAOIT: output tensor", &result);
       }
       if (result.isOk()) {
-        pipelineGraph = vgf.createDataGraphPipeline(*ctx, "DFAOIT: data graph", &result);
+        const lvk::TensorHandle inputs[] = {tensorInput};
+        const lvk::TensorHandle outputs[] = {tensorOutput};
+        pipelineGraph = vgf.createDataGraphPipeline(*ctx, inputs, outputs, "DFAOIT: data graph", &result);
       }
       if (result.isOk()) {
         graphReady = true;
@@ -1209,16 +1230,14 @@ VULKAN_APP_MAIN {
         .nearest = ctx->gpuAddress(nearestBuffer),
         .slots = ctx->gpuAddress(slotsBuffer),
         .counter = ctx->gpuAddress(counterBuffer),
+        .tensorInput = ctx->gpuAddress(tensorInputBuffer),
+        .tensorOutput = ctx->gpuAddress(tensorOutputBuffer),
         .texSum = texSum.index(),
         .texAccumulated = texAccumulated.index(),
         .texCount = texCount.index(),
         .imageOut = texApproximate.index(),
-        .tensorInput = tensorInput.index(),
-        .tensorOutput = tensorOutput.index(),
         .viewWidth = dim.width,
         .viewHeight = dim.height,
-        .tensorWidth = kTensorWidth,
-        .tensorHeight = kTensorHeight,
     };
 
     if (technique == Technique_WeightedBlended) {

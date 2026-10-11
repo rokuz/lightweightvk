@@ -956,6 +956,7 @@ enum TextureUsageBits : uint8_t {
   TextureUsageBits_InputAttachment = 1 << 3,
   TextureUsageBits_FragmentDensityMap = 1 << 4,
   TextureUsageBits_ShadingRateAttachment = 1 << 5,
+  TextureUsageBits_TensorAliasing = 1 << 6,
 };
 
 using TextureUsageFlags = uint8_t;
@@ -1187,7 +1188,6 @@ constexpr uint32_t LVK_MAX_DATA_GRAPH_TENSORS = 16;
 constexpr uint32_t LVK_MAX_DATA_GRAPH_TENSOR_SETS = 8;
 
 enum TensorUsageBits : uint8_t {
-  TensorUsageBits_Shader = 1 << 0,
   TensorUsageBits_TransferSrc = 1 << 1,
   TensorUsageBits_TransferDst = 1 << 2,
   TensorUsageBits_ImageAliasing = 1 << 3,
@@ -1205,7 +1205,7 @@ struct TensorDesc {
   int64_t dimensions[LVK_TENSOR_MAX_RANK] = {};
   int64_t strides[LVK_TENSOR_MAX_RANK] = {};
   TensorTiling tiling = TensorTiling_Optimal;
-  uint8_t usage = TensorUsageBits_Shader;
+  uint8_t usage = TensorUsageBits_DataGraph;
   StorageType storage = StorageType_Device;
   const void* data = nullptr;
   const char* debugName = "";
@@ -1217,11 +1217,6 @@ struct TensorProperties {
   uint64_t maxPerDimensionTensorElements = 0;
   int64_t maxTensorStride = 0;
   uint64_t maxTensorSize = 0;
-  uint32_t maxTensorShaderAccessArrayLength = 0;
-  uint32_t maxTensorShaderAccessSize = 0;
-  uint32_t maxBindlessTensors = 0;
-  uint32_t shaderTensorSupportedStages = 0;
-  bool shaderTensorArrayNonUniformIndexing = false;
   bool tensorNonPacked = false;
 };
 
@@ -1447,6 +1442,15 @@ class IContext {
   [[nodiscard]] virtual Holder<TensorHandle> createTensor(const TensorDesc& desc,
                                                           const char* debugName = nullptr,
                                                           Result* outResult = nullptr) = 0;
+  [[nodiscard]] virtual Holder<TensorHandle> createBufferAliasingTensor(BufferHandle buffer,
+                                                                        uint64_t bufferOffset,
+                                                                        const TensorDesc& desc,
+                                                                        const char* debugName = nullptr,
+                                                                        Result* outResult = nullptr) = 0;
+  [[nodiscard]] virtual Holder<TensorHandle> createTextureAliasingTensor(TextureHandle texture,
+                                                                         const TensorDesc& desc,
+                                                                         const char* debugName = nullptr,
+                                                                         Result* outResult = nullptr) = 0;
   [[nodiscard]] virtual Holder<DataGraphPipelineHandle> createDataGraphPipeline(const DataGraphPipelineDesc& desc,
                                                                                 Result* outResult = nullptr) = 0;
 
@@ -1490,10 +1494,6 @@ class IContext {
   // `data` contains mip-levels and layers as in https://registry.khronos.org/KTX/specs/1.0/ktxspec.v1.html
   virtual Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) = 0;
   virtual Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) = 0;
-  [[nodiscard]] virtual Holder<TextureHandle> createTextureAliasingTensor(TensorHandle tensor,
-                                                                          const TextureDesc& desc,
-                                                                          const char* debugName = nullptr,
-                                                                          Result* outResult = nullptr) = 0;
   [[nodiscard]] virtual Dimensions getDimensions(TextureHandle handle) const = 0;
   [[nodiscard]] virtual float getAspectRatio(TextureHandle handle) const = 0;
   [[nodiscard]] virtual Format getFormat(TextureHandle handle) const = 0;

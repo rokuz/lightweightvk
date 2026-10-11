@@ -442,7 +442,7 @@ void main() {
 #define REVERSE_Z 0
 #define NSS_SHADER_QUALITY_MODE 0
 #define SCALE_PRESET_MODE NSS_SCALE_PRESET_X2
-#define NSS_SUPPORT_TENSOR 1
+#define NSS_SUPPORT_TENSOR 0
 #define NSS_BINDLESS 1
 #define MANAGE_HISTORY 0
 )"
@@ -510,14 +510,20 @@ void main() {
 }
 )";
 
-const char* kNssFeedbackToImage = NSS_CONFIG_GLSL R"(
+const char* kNssFeedbackToTexture = NSS_CONFIG_GLSL R"(
+#extension GL_EXT_shader_8bit_storage : require
+#extension GL_EXT_shader_explicit_arithmetic_types_int8 : require
 
 layout(local_size_x = 16, local_size_y = 16, local_size_z = 1) in;
 
 layout(set = 0, binding = 2, rgba8_snorm) uniform writeonly image2D kImagesRGBA8Snorm[];
 
+layout(std430, buffer_reference) readonly buffer FeedbackTensor {
+  i8vec4 texels[];
+};
+
 layout(push_constant) uniform PushConstants {
-  uint tensor;
+  FeedbackTensor tensor;
   uint image;
   uint width;
   uint height;
@@ -528,9 +534,7 @@ void main() {
   if (p.x >= pc.width || p.y >= pc.height) {
     return;
   }
-  int8_t v[4];
-  tensorReadARM(kTensorsI8_4[pc.tensor], uint[](0, p.y, p.x, 0), v);
-  const vec4 snorm = max(vec4(v[0], v[1], v[2], v[3]) / 127.0, vec4(-1.0));
+  const vec4 snorm = max(vec4(pc.tensor.texels[p.y * pc.width + p.x]) / 127.0, vec4(-1.0));
   imageStore(kImagesRGBA8Snorm[pc.image], ivec2(p), snorm);
 }
 )";
@@ -1187,8 +1191,8 @@ struct NssPushConstants {
   uint32_t imgLumaDeriv;
   uint32_t imgNearestDepthCoord;
   uint32_t imgOutput;
-  uint32_t tensorInput;
-  uint32_t tensorKpn;
+  uint64_t tensorInput;
+  uint64_t tensorKpn;
 };
 
 std::string expandIncludes(const std::string& text, std::set<std::string>& included, bool& ok);
@@ -1274,10 +1278,13 @@ struct NeuralSuperSampling {
   vec2 jitter = vec2(0.0f);
   vec2 jitterPrev = vec2(0.0f);
 
+  lvk::Holder<lvk::BufferHandle> bufTensorInput;
+  lvk::Holder<lvk::BufferHandle> bufTensorKpn;
+  lvk::Holder<lvk::BufferHandle> bufTensorFeedback;
+  lvk::Holder<lvk::TextureHandle> texFeedback;
   lvk::Holder<lvk::TensorHandle> tensorInput;
   lvk::Holder<lvk::TensorHandle> tensorKpn;
   lvk::Holder<lvk::TensorHandle> tensorFeedback;
-  lvk::Holder<lvk::TextureHandle> texFeedback;
   bool feedbackAliasing = false;
   lvk::Holder<lvk::TextureHandle> texLumaDeriv[2];
   lvk::Holder<lvk::TextureHandle> texNearestDepthCoord;
@@ -1289,12 +1296,12 @@ struct NeuralSuperSampling {
   lvk::Holder<lvk::ShaderModuleHandle> smDepthScatter;
   lvk::Holder<lvk::ShaderModuleHandle> smPreprocess;
   lvk::Holder<lvk::ShaderModuleHandle> smPostprocess;
-  lvk::Holder<lvk::ShaderModuleHandle> smFeedbackToImage;
+  lvk::Holder<lvk::ShaderModuleHandle> smFeedbackToTexture;
   lvk::VgfModel vgf;
   lvk::Holder<lvk::ComputePipelineHandle> pipelineDepthScatter;
   lvk::Holder<lvk::ComputePipelineHandle> pipelinePreprocess;
   lvk::Holder<lvk::ComputePipelineHandle> pipelinePostprocess;
-  lvk::Holder<lvk::ComputePipelineHandle> pipelineFeedbackToImage;
+  lvk::Holder<lvk::ComputePipelineHandle> pipelineFeedbackToTexture;
   lvk::Holder<lvk::DataGraphPipelineHandle> pipelineGraph;
   lvk::TensorHandle graphInputs[1] = {};
   lvk::TensorHandle graphOutputs[2] = {};
@@ -1342,65 +1349,58 @@ struct NeuralSuperSampling {
     }
 
     lvk::Result result;
-    tensorInput = ctx->createTensor(
-        {
-            .format = lvk::Format_R_I8,
-            .rank = 4,
-            .dimensions = {1, kGraphHeight, kGraphWidth, kInputChannels},
-            .usage = lvk::TensorUsageBits_Shader | lvk::TensorUsageBits_DataGraph,
-        },
-        "NSS: input tensor",
-        &result);
+    auto graphTensorDesc = [](const int64_t (&dims)[4]) -> lvk::TensorDesc {
+      return {
+          .format = lvk::Format_R_I8,
+          .rank = 4,
+          .dimensions = {dims[0], dims[1], dims[2], dims[3]},
+          .usage = lvk::TensorUsageBits_DataGraph,
+      };
+    };
+    auto createTensorInBuffer = [ctx, &result, &graphTensorDesc](lvk::Holder<lvk::BufferHandle>& buffer,
+                                                                 const int64_t (&dims)[4],
+                                                                 const char* debugName) -> lvk::Holder<lvk::TensorHandle> {
+      const lvk::TensorDesc desc = graphTensorDesc(dims);
+      buffer = ctx->createBuffer({
+          .usage = lvk::BufferUsageBits_Storage,
+          .storage = lvk::StorageType_Device,
+          .size = lvk::getTensorDataSize(desc),
+          .debugName = debugName,
+      });
+      return ctx->createBufferAliasingTensor(buffer, 0, desc, debugName, &result);
+    };
+    tensorInput = createTensorInBuffer(bufTensorInput, dimsInput, "NSS: input tensor");
     if (!result.isOk()) {
       LLOGW("NSS: cannot create the input tensor: %s\n", result.message);
       return false;
     }
-    tensorKpn = ctx->createTensor(
-        {
-            .format = lvk::Format_R_I8,
-            .rank = 4,
-            .dimensions = {1, kKpnHeight, kKpnWidth, kKpnChannels},
-            .usage = lvk::TensorUsageBits_Shader | lvk::TensorUsageBits_DataGraph,
-        },
-        "NSS: KPN coefficients",
-        &result);
+    tensorKpn = createTensorInBuffer(bufTensorKpn, dimsKpn, "NSS: KPN coefficients");
     if (!result.isOk()) {
       LLOGW("NSS: cannot create the KPN tensor: %s\n", result.message);
       return false;
     }
-    feedbackAliasing = (ctx->getTensorFormatSupport(lvk::Format_R_I8, lvk::TensorTiling_Linear) & lvk::TensorUsageBits_ImageAliasing) != 0;
-    LLOGL("NSS: temporal feedback via %s\n", feedbackAliasing ? "tensor image aliasing" : "a tensor to image copy");
-    tensorFeedback = ctx->createTensor(
-        {
-            .format = lvk::Format_R_I8,
-            .rank = 4,
-            .dimensions = {1, kGraphHeight, kGraphWidth, kFeedbackChannels},
-            .tiling = feedbackAliasing ? lvk::TensorTiling_Linear : lvk::TensorTiling_Optimal,
-            .usage = (uint8_t)(feedbackAliasing ? (lvk::TensorUsageBits_DataGraph | lvk::TensorUsageBits_ImageAliasing |
-                                                   lvk::TensorUsageBits_TransferDst)
-                                                : (lvk::TensorUsageBits_DataGraph | lvk::TensorUsageBits_Shader)),
-        },
-        "NSS: temporal feedback",
-        &result);
-    if (!result.isOk()) {
-      LLOGW("NSS: cannot create the feedback tensor: %s\n", result.message);
-      return false;
-    }
+    feedbackAliasing = (ctx->getTensorFormatSupport(lvk::Format_R_I8, lvk::TensorTiling_Optimal) & lvk::TensorUsageBits_ImageAliasing) != 0;
     if (feedbackAliasing) {
-      texFeedback = ctx->createTextureAliasingTensor(tensorFeedback,
-                                                     {
-                                                         .type = lvk::TextureType_2D,
-                                                         .format = lvk::Format_RGBA_SN8,
-                                                         .dimensions = {kGraphWidth, kGraphHeight},
-                                                         .usage = lvk::TextureUsageBits_Sampled,
-                                                     },
-                                                     "NSS: temporal feedback (texture)",
-                                                     &result);
+      texFeedback = ctx->createTexture({
+          .type = lvk::TextureType_2D,
+          .format = lvk::Format_RGBA_SN8,
+          .dimensions = {kGraphWidth, kGraphHeight},
+          .usage = lvk::TextureUsageBits_Sampled | lvk::TextureUsageBits_TensorAliasing,
+          .debugName = "NSS: temporal feedback (texture)",
+      });
+      tensorFeedback = ctx->createTextureAliasingTensor(texFeedback, graphTensorDesc(dimsFeedback), "NSS: temporal feedback", &result);
+      feedbackAliasing = result.isOk();
+      if (!feedbackAliasing) {
+        LLOGW("NSS: cannot alias the feedback texture: %s\n", result.message);
+        texFeedback = nullptr;
+      }
+    }
+    if (!feedbackAliasing) {
+      tensorFeedback = createTensorInBuffer(bufTensorFeedback, dimsFeedback, "NSS: temporal feedback");
       if (!result.isOk()) {
-        LLOGW("NSS: cannot create the feedback texture: %s\n", result.message);
+        LLOGW("NSS: cannot create the feedback tensor: %s\n", result.message);
         return false;
       }
-    } else {
       texFeedback = ctx->createTexture({
           .type = lvk::TextureType_2D,
           .format = lvk::Format_RGBA_SN8,
@@ -1409,6 +1409,7 @@ struct NeuralSuperSampling {
           .debugName = "NSS: temporal feedback (texture)",
       });
     }
+    LLOGL("NSS: temporal feedback via %s\n", feedbackAliasing ? "a texture aliased by the tensor" : "a buffer copied into a texture");
 
     for (uint32_t i = 0; i != 2; i++) {
       texLumaDeriv[i] = ctx->createTexture({
@@ -1469,7 +1470,7 @@ struct NeuralSuperSampling {
         {kNssDepthScatter, "NSS: depth scatter", &smDepthScatter, &pipelineDepthScatter},
         {kNssPreprocess, "NSS: preprocess", &smPreprocess, &pipelinePreprocess},
         {kNssPostprocess, "NSS: postprocess", &smPostprocess, &pipelinePostprocess},
-        {kNssFeedbackToImage, "NSS: feedback to image", &smFeedbackToImage, &pipelineFeedbackToImage},
+        {kNssFeedbackToTexture, "NSS: feedback to texture", &smFeedbackToTexture, &pipelineFeedbackToTexture},
     };
     for (const ComputePass& pass : passes) {
       const std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
@@ -1514,12 +1515,12 @@ struct NeuralSuperSampling {
     pipelineDepthScatter = nullptr;
     pipelinePreprocess = nullptr;
     pipelinePostprocess = nullptr;
-    pipelineFeedbackToImage = nullptr;
-    smFeedbackToImage = nullptr;
+    pipelineFeedbackToTexture = nullptr;
     vgf = lvk::VgfModel();
     smDepthScatter = nullptr;
     smPreprocess = nullptr;
     smPostprocess = nullptr;
+    smFeedbackToTexture = nullptr;
     bufConstants = nullptr;
     samplerPoint = nullptr;
     samplerLinear = nullptr;
@@ -1529,10 +1530,13 @@ struct NeuralSuperSampling {
     texOutput[1] = nullptr;
     texLumaDeriv[0] = nullptr;
     texLumaDeriv[1] = nullptr;
-    texFeedback = nullptr;
     tensorFeedback = nullptr;
     tensorKpn = nullptr;
     tensorInput = nullptr;
+    texFeedback = nullptr;
+    bufTensorFeedback = nullptr;
+    bufTensorKpn = nullptr;
+    bufTensorInput = nullptr;
   }
 
   lvk::TextureHandle history() const {
@@ -1654,12 +1658,7 @@ struct NeuralSuperSampling {
       for (const lvk::TextureHandle tex : clearTargets) {
         buffer.cmdClearColorImage(tex, {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}});
       }
-      if (feedbackAliasing) {
-        const std::vector<uint8_t> zeros(lvk::getTensorDataSize(ctx->getTensorDesc(tensorFeedback)), 0);
-        ctx->upload(tensorFeedback, zeros.data(), zeros.size());
-      } else {
-        buffer.cmdClearColorImage(texFeedback, {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}});
-      }
+      buffer.cmdClearColorImage(texFeedback, {.float32 = {0.0f, 0.0f, 0.0f, 0.0f}});
       buffer.cmdPopDebugGroupLabel();
     }
 
@@ -1679,8 +1678,8 @@ struct NeuralSuperSampling {
         .imgLumaDeriv = lumaDeriv.index(),
         .imgNearestDepthCoord = texNearestDepthCoord.index(),
         .imgOutput = texOut.index(),
-        .tensorInput = tensorInput.index(),
-        .tensorKpn = tensorKpn.index(),
+        .tensorInput = ctx->gpuAddress(bufTensorInput),
+        .tensorKpn = ctx->gpuAddress(bufTensorKpn),
     };
 
     auto groups = [](uint32_t size) -> uint32_t { return (size + kThreadGroup - 1) / kThreadGroup; };
@@ -1714,20 +1713,20 @@ struct NeuralSuperSampling {
     buffer.cmdPopDebugGroupLabel();
 
     if (!feedbackAliasing) {
-      buffer.cmdPushDebugGroupLabel("NSS: feedback tensor to image", 0xff0000ff);
-      buffer.cmdBindComputePipeline(pipelineFeedbackToImage);
+      buffer.cmdPushDebugGroupLabel("NSS: feedback to texture", 0xff0000ff);
+      buffer.cmdBindComputePipeline(pipelineFeedbackToTexture);
       const struct {
-        uint32_t tensor;
+        uint64_t tensor;
         uint32_t image;
         uint32_t width;
         uint32_t height;
-      } pcCopy = {
-          .tensor = tensorFeedback.index(),
+      } pcFeedback = {
+          .tensor = ctx->gpuAddress(bufTensorFeedback),
           .image = texFeedback.index(),
           .width = kGraphWidth,
           .height = kGraphHeight,
       };
-      buffer.cmdPushConstants(pcCopy);
+      buffer.cmdPushConstants(pcFeedback);
       buffer.cmdDispatch({groups(kGraphWidth), groups(kGraphHeight), 1},
                          {
                              .storageImages = {texFeedback},
