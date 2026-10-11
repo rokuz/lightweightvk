@@ -272,7 +272,8 @@ float2 unpackHalf2(uint d) {
 bool isCandidateOpaque(inout RayQuery<RAY_FLAG_NONE> rq) {
   if (!pc.enableTextures)
     return true;
-  uint index = 3 * rq.CandidatePrimitiveIndex();
+  // instanceCustomIndex = first triangle of the BLAS chunk
+  uint index = 3 * (rq.CandidateInstanceID() + rq.CandidatePrimitiveIndex());
   uint i0 = pc.indices->idx[index + 0];
   uint i1 = pc.indices->idx[index + 1];
   uint i2 = pc.indices->idx[index + 2];
@@ -908,7 +909,8 @@ void computeTBN(in vec3 n, out vec3 x, out vec3 y) {
 bool isCandidateOpaque(rayQueryEXT rq) {
   if (!pc.enableTextures)
     return true;
-  uint index = 3 * rayQueryGetIntersectionPrimitiveIndexEXT(rq, false);
+  // instanceCustomIndex = first triangle of the BLAS chunk
+  uint index = 3 * (rayQueryGetIntersectionInstanceCustomIndexEXT(rq, false) + rayQueryGetIntersectionPrimitiveIndexEXT(rq, false));
   uint i0 = pc.indices.idx[index + 0];
   uint i1 = pc.indices.idx[index + 1];
   uint i2 = pc.indices.idx[index + 2];
@@ -1405,9 +1407,10 @@ bool initModel(VulkanApp& app) {
     blasDesc.buildRange.primitiveOffset = i * 3 * sizeof(uint32_t);
     blasDesc.buildRange.primitiveCount = (primitiveCount < rest) ? primitiveCount : rest;
     res.BLAS.emplace_back(ctx_->createAccelerationStructure(blasDesc));
+    LVK_ASSERT_MSG(i < (1u << 24), "instanceCustomIndex has only 24 bits");
     instances.emplace_back(lvk::AccelStructInstance{
         .transform = (const lvk::mat3x4&)transform,
-        .instanceCustomIndex = 0,
+        .instanceCustomIndex = i,
         .mask = 0xff,
         .instanceShaderBindingTableRecordOffset = 0,
         .flags = lvk::AccelStructInstanceFlagBits_TriangleFacingCullDisable,
