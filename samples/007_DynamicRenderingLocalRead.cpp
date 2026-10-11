@@ -201,9 +201,9 @@ ComposeVSOutput vertexMain(uint vertexId : SV_VertexID) {
   return out;
 }
 
-[[vk::input_attachment_index(0)]] [[vk::binding(0, 1)]] SubpassInput inputAlbedo;
-[[vk::input_attachment_index(1)]] [[vk::binding(1, 1)]] SubpassInput inputNormal;
-[[vk::input_attachment_index(2)]] [[vk::binding(2, 1)]] SubpassInput inputWorldPos;
+[[vk::input_attachment_index(1)]] [[vk::binding(0, 1)]] SubpassInput inputAlbedo;
+[[vk::input_attachment_index(2)]] [[vk::binding(1, 1)]] SubpassInput inputNormal;
+[[vk::input_attachment_index(3)]] [[vk::binding(2, 1)]] SubpassInput inputWorldPos;
 
 [shader("fragment")]
 float4 fragmentMain(ComposeVSOutput input) : SV_Target0 {
@@ -390,9 +390,10 @@ const char* codeComposeFS = R"(
   layout (location=2) tileImageEXT highp attachmentEXT inputNormal;
   layout (location=3) tileImageEXT highp attachmentEXT inputWorldPos;
 #else
-  layout (input_attachment_index=0, set=1, binding=0) uniform subpassInput inputAlbedo;
-  layout (input_attachment_index=1, set=1, binding=1) uniform subpassInput inputNormal;
-  layout (input_attachment_index=2, set=1, binding=2) uniform subpassInput inputWorldPos;
+  // input attachment indices are color attachment indices: 0 is the swapchain image
+  layout (input_attachment_index=1, set=1, binding=0) uniform subpassInput inputAlbedo;
+  layout (input_attachment_index=2, set=1, binding=1) uniform subpassInput inputNormal;
+  layout (input_attachment_index=3, set=1, binding=2) uniform subpassInput inputWorldPos;
 #endif // defined(has_EXT_shader_tile_image)
 
 layout (location=0) in vec2 in_UV;
