@@ -1058,6 +1058,7 @@ enum AccelStructType : uint8_t {
   AccelStructType_Invalid = 0,
   AccelStructType_TLAS = 1,
   AccelStructType_BLAS = 2,
+  AccelStructType_OpacityMicromap = 3, // VK_KHR_opacity_micromap, see `IContext::supportsOpacityMicromap()`
 };
 
 enum AccelStructGeomType : uint8_t {
@@ -1088,6 +1089,42 @@ enum AccelStructInstanceFlagBits : uint8_t {
   AccelStructInstanceFlagBits_ForceOpacityMicromap2State = 1 << 4,
   AccelStructInstanceFlagBits_DisableOpacityMicromaps = 1 << 5,
 };
+
+enum OpacityMicromapFormat : uint8_t {
+  OpacityMicromapFormat_2State = 1, // 1 bit per micro-triangle: transparent, opaque
+  OpacityMicromapFormat_4State = 2, // 2 bits per micro-triangle: transparent, opaque, unknown-transparent, unknown-opaque
+};
+
+// unknown states are resolved by any-hit shaders or ray query candidates
+enum OpacityMicromapState : uint8_t {
+  OpacityMicromapState_Transparent = 0,
+  OpacityMicromapState_Opaque = 1,
+  OpacityMicromapState_UnknownTransparent = 2,
+  OpacityMicromapState_UnknownOpaque = 3,
+};
+
+// whole-triangle values in `AccelStructDesc::micromapIndexBuffer`
+enum OpacityMicromapSpecialIndex : int32_t {
+  OpacityMicromapSpecialIndex_FullyTransparent = -1,
+  OpacityMicromapSpecialIndex_FullyOpaque = -2,
+  OpacityMicromapSpecialIndex_FullyUnknownTransparent = -3,
+  OpacityMicromapSpecialIndex_FullyUnknownOpaque = -4,
+};
+
+struct OpacityMicromapUsage {
+  uint32_t count = 0;
+  uint32_t subdivisionLevel = 0;
+  OpacityMicromapFormat format = OpacityMicromapFormat_4State;
+};
+
+// one element of `AccelStructDesc::micromapTriangles` (matches `VkMicromapTriangleKHR`)
+struct OpacityMicromapTriangle {
+  uint32_t dataOffset = 0; // in bytes, into `AccelStructDesc::micromapData`
+  uint16_t subdivisionLevel = 0; // 4^subdivisionLevel micro-triangles in bird curve order
+  uint16_t format = OpacityMicromapFormat_4State;
+};
+
+static_assert(sizeof(OpacityMicromapTriangle) == 8);
 
 struct AccelStructSizes {
   uint64_t accelerationStructureSize = 0;
@@ -1128,6 +1165,14 @@ struct AccelStructDesc {
   BufferHandle indexBuffer;
   BufferHandle transformBuffer;
   BufferHandle instancesBuffer;
+  AccelStructHandle micromap; // BLAS: optional
+  BufferHandle micromapIndexBuffer; // BLAS: indices into `micromap` triangles or `OpacityMicromapSpecialIndex` values
+  BufferHandle micromapData; // packed micro-triangle states
+  BufferHandle micromapTriangles; // OpacityMicromapTriangle[]
+  IndexFormat micromapIndexFormat = IndexFormat_UI32;
+  uint32_t micromapIndexOffset = 0; // in bytes
+  const OpacityMicromapUsage* micromapUsageCounts = nullptr; // how many triangles use each subdivision level and format
+  uint32_t micromapNumUsageCounts = 0;
   AccelStructBuildRange buildRange = {};
   uint8_t buildFlags = AccelStructBuildFlagBits_PreferFastTrace;
   const char* debugName = "";

@@ -3905,6 +3905,7 @@ void lvk::CommandBuffer::cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handl
     LVK_ASSERT(as && !as->isTLAS);
     LVK_ASSERT_MSG(as->buildFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR,
                    "BLAS must be built with AccelStructBuildFlagBits_AllowUpdate to be refit");
+    as->geometry.geometry.triangles.pNext = as->opacityMicromap.sType ? &as->opacityMicromap : nullptr;
     buildInfos.push_back(VkAccelerationStructureBuildGeometryInfoKHR{
         .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
         .type = VK_ACCELERATION_STRUCTURE_TYPE_BOTTOM_LEVEL_KHR,
@@ -4989,6 +4990,13 @@ lvk::Holder<lvk::AccelStructHandle> lvk::VulkanContext::createAccelerationStruct
   case AccelStructType_TLAS:
     handle = createTLAS(desc, &result);
     break;
+  case AccelStructType_OpacityMicromap:
+    if (!LVK_VERIFY(has_KHR_opacity_micromap_)) {
+      Result::setResult(outResult, Result(Result::Code::RuntimeError, "VK_KHR_opacity_micromap is not enabled"));
+      return {};
+    }
+    handle = createOpacityMicromap(desc, &result);
+    break;
   default:
     LVK_ASSERT_MSG(false, "Invalid acceleration structure type");
     Result::setResult(outResult, Result(Result::Code::ArgumentOutOfRange, "Invalid acceleration structure type"));
@@ -5577,8 +5585,9 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTextureView(lvk::Textu
 
 lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& desc, Result* outResult) {
   VkAccelerationStructureGeometryKHR accelerationStructureGeometry{};
+  VkAccelerationStructureTrianglesOpacityMicromapKHR opacityMicromap{};
   VkAccelerationStructureBuildSizesInfoKHR accelerationStructureBuildSizesInfo{};
-  getBuildInfoBLAS(desc, accelerationStructureGeometry, accelerationStructureBuildSizesInfo);
+  getBuildInfoBLAS(desc, accelerationStructureGeometry, opacityMicromap, accelerationStructureBuildSizesInfo);
 
   char debugNameBuffer[256] = {0};
   if (desc.debugName) {
@@ -5603,7 +5612,11 @@ lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& des
           nullptr,
           outResult),
       .geometry = accelerationStructureGeometry,
+      .opacityMicromap = opacityMicromap,
   };
+  // must not point to the stack; cmdUpdateBLAS() re-links it
+  accelStruct.geometry.geometry.triangles.pNext = nullptr;
+
   const VkAccelerationStructureCreateInfoKHR ciAccelerationStructure = {
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_KHR,
       .buffer = getVkBuffer(this, accelStruct.buffer),
@@ -5656,6 +5669,86 @@ lvk::AccelStructHandle lvk::VulkanContext::createBLAS(const AccelStructDesc& des
   if (desc.buildFlags & lvk::AccelStructBuildFlagBits_AllowUpdate) {
     accelStruct.scratchBuffer = std::move(scratchBuffer);
   }
+
+  return accelStructuresPool_.create(std::move(accelStruct));
+}
+
+lvk::AccelStructHandle lvk::VulkanContext::createOpacityMicromap(const AccelStructDesc& desc, Result* outResult) {
+  VkAccelerationStructureGeometryKHR accelerationStructureGeometry{};
+  VkAccelerationStructureGeometryMicromapDataKHR micromapData{};
+  std::vector<VkMicromapUsageKHR> usageCounts;
+  VkAccelerationStructureBuildSizesInfoKHR accelerationStructureBuildSizesInfo{};
+  getBuildInfoOpacityMicromap(desc, accelerationStructureGeometry, micromapData, usageCounts, accelerationStructureBuildSizesInfo);
+
+  char debugNameBuffer[256] = {0};
+  if (desc.debugName) {
+    (void)snprintf(debugNameBuffer, sizeof(debugNameBuffer) - 1, "Buffer: %s", desc.debugName);
+  }
+  lvk::AccelerationStructure accelStruct = {
+      .buildFlags = buildFlagsToVkBuildAccelerationStructureFlags(desc.buildFlags),
+      .buffer = createBuffer(
+          {
+              .usage = lvk::BufferUsageBits_AccelStructStorage,
+              .storage = lvk::StorageType_Device,
+              .size = accelerationStructureBuildSizesInfo.accelerationStructureSize,
+              .debugName = debugNameBuffer,
+          },
+          nullptr,
+          outResult),
+  };
+
+  // VUID-VkAccelerationStructureCreateInfo2KHR-addressRange-11605
+  LVK_ASSERT_MSG(gpuAddress(accelStruct.buffer) % 256 == 0, "Opacity micromap storage must be 256-byte aligned");
+
+  const VkAccelerationStructureCreateInfo2KHR ciAccelerationStructure = {
+      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_CREATE_INFO_2_KHR,
+      .addressRange =
+          {
+              .address = gpuAddress(accelStruct.buffer),
+              .size = accelerationStructureBuildSizesInfo.accelerationStructureSize,
+          },
+      .type = VK_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP_KHR,
+  };
+  VK_ASSERT(vkCreateAccelerationStructure2KHR(vkDevice_, &ciAccelerationStructure, nullptr, &accelStruct.vkHandle));
+
+  if (!LVK_VERIFY(accelStruct.vkHandle)) {
+    Result::setResult(outResult, Result::Code::RuntimeError, "Cannot create VkAccelerationStructureKHR (opacity micromap)");
+    return {};
+  }
+
+  if (desc.debugName) {
+    VK_ASSERT(lvk::setDebugObjectName(
+        vkDevice_, VK_OBJECT_TYPE_ACCELERATION_STRUCTURE_KHR, (uint64_t)accelStruct.vkHandle, desc.debugName));
+  }
+
+  lvk::Holder<lvk::BufferHandle> scratchBuffer = createBuffer(
+      {
+          .usage = lvk::BufferUsageBits_Storage,
+          .storage = lvk::StorageType_Device,
+          .size = accelerationStructureBuildSizesInfo.buildScratchSize,
+          .debugName = "Buffer: opacity micromap scratch",
+      },
+      nullptr,
+      outResult);
+
+  const VkAccelerationStructureBuildGeometryInfoKHR accelerationBuildGeometryInfo{
+      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+      .type = VK_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP_KHR,
+      .flags = buildFlagsToVkBuildAccelerationStructureFlags(desc.buildFlags),
+      .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR,
+      .dstAccelerationStructure = accelStruct.vkHandle,
+      .geometryCount = 1,
+      .pGeometries = &accelerationStructureGeometry,
+      .scratchData = {.deviceAddress = getAlignedAddress(gpuAddress(scratchBuffer),
+                                                         accelerationStructureProperties_.minAccelerationStructureScratchOffsetAlignment)},
+  };
+
+  const VkAccelerationStructureBuildRangeInfoKHR* accelerationBuildStructureRangeInfos[] = {nullptr};
+
+  lvk::ICommandBuffer& buffer = acquireCommandBuffer();
+  vkCmdBuildAccelerationStructuresKHR(
+      lvk::getVkCommandBuffer(buffer), 1, &accelerationBuildGeometryInfo, accelerationBuildStructureRangeInfos);
+  wait(submit(buffer, {}, {}));
 
   return accelStructuresPool_.create(std::move(accelStruct));
 }
@@ -7419,13 +7512,23 @@ lvk::AccelStructSizes lvk::VulkanContext::getAccelStructSizes(const AccelStructD
   }
 
   VkAccelerationStructureGeometryKHR accelerationStructureGeometry{};
+  VkAccelerationStructureTrianglesOpacityMicromapKHR opacityMicromap{};
+  VkAccelerationStructureGeometryMicromapDataKHR micromapData{};
+  std::vector<VkMicromapUsageKHR> usageCounts;
   VkAccelerationStructureBuildSizesInfoKHR accelerationStructureBuildSizesInfo{};
   switch (desc.type) {
   case AccelStructType_BLAS:
-    getBuildInfoBLAS(desc, accelerationStructureGeometry, accelerationStructureBuildSizesInfo);
+    getBuildInfoBLAS(desc, accelerationStructureGeometry, opacityMicromap, accelerationStructureBuildSizesInfo);
     break;
   case AccelStructType_TLAS:
     getBuildInfoTLAS(desc, accelerationStructureGeometry, accelerationStructureBuildSizesInfo);
+    break;
+  case AccelStructType_OpacityMicromap:
+    if (!LVK_VERIFY(has_KHR_opacity_micromap_)) {
+      Result::setResult(outResult, Result(Result::Code::RuntimeError, "VK_KHR_opacity_micromap is not enabled"));
+      return {};
+    }
+    getBuildInfoOpacityMicromap(desc, accelerationStructureGeometry, micromapData, usageCounts, accelerationStructureBuildSizesInfo);
     break;
   default:
     LVK_ASSERT_MSG(false, "Invalid acceleration structure type");
@@ -7825,6 +7928,7 @@ bool lvk::VulkanContext::shouldEnableHostImageCopy(const VkImageCreateInfo& ci) 
 
 void lvk::VulkanContext::getBuildInfoBLAS(const AccelStructDesc& desc,
                                           VkAccelerationStructureGeometryKHR& outGeometry,
+                                          VkAccelerationStructureTrianglesOpacityMicromapKHR& outOpacityMicromap,
                                           VkAccelerationStructureBuildSizesInfoKHR& outSizesInfo) const {
   LVK_ASSERT(desc.type == AccelStructType_BLAS);
   LVK_ASSERT(desc.geometryType == AccelStructGeomType_Triangles);
@@ -7866,6 +7970,30 @@ void lvk::VulkanContext::getBuildInfoBLAS(const AccelStructDesc& desc,
           },
       .flags = geometryFlags,
   };
+
+  outOpacityMicromap = {};
+
+  if (desc.micromap.valid()) {
+    LVK_ASSERT(has_KHR_opacity_micromap_);
+    const AccelerationStructure* micromap = accelStructuresPool_.get(desc.micromap);
+    const lvk::VulkanBuffer* indexBuffer = buffersPool_.get(desc.micromapIndexBuffer);
+    LVK_ASSERT(micromap && micromap->vkHandle);
+    LVK_ASSERT(indexBuffer && (indexBuffer->vkUsageFlags_ & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR));
+    const uint32_t indexStride = desc.micromapIndexFormat == IndexFormat_UI8    ? sizeof(uint8_t)
+                                 : desc.micromapIndexFormat == IndexFormat_UI16 ? sizeof(uint16_t)
+                                                                                       : sizeof(uint32_t);
+    // VUID-vkCmdBuildAccelerationStructuresKHR-indexBuffer-11577
+    LVK_ASSERT(desc.micromapIndexOffset % indexStride == 0);
+    LVK_ASSERT(desc.micromapIndexOffset + (VkDeviceSize)indexStride * desc.buildRange.primitiveCount <= indexBuffer->bufferSize_);
+    outOpacityMicromap = VkAccelerationStructureTrianglesOpacityMicromapKHR{
+        .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_TRIANGLES_OPACITY_MICROMAP_KHR,
+        .indexType = indexFormatToVkIndexType(desc.micromapIndexFormat),
+        .indexBuffer = gpuAddress(desc.micromapIndexBuffer) + desc.micromapIndexOffset,
+        .indexStride = indexStride,
+        .micromap = micromap->vkHandle,
+    };
+    outGeometry.geometry.triangles.pNext = &outOpacityMicromap;
+  }
 
   const VkAccelerationStructureBuildGeometryInfoKHR accelerationBuildGeometryInfo{
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
@@ -7938,6 +8066,86 @@ void lvk::VulkanContext::getBuildInfoTLAS(const AccelStructDesc& desc,
   const uint32_t alignment = accelerationStructureProperties_.minAccelerationStructureScratchOffsetAlignment;
   outSizesInfo.accelerationStructureSize += alignment;
   outSizesInfo.updateScratchSize += alignment;
+  outSizesInfo.buildScratchSize += alignment;
+}
+
+void lvk::VulkanContext::getBuildInfoOpacityMicromap(const AccelStructDesc& desc,
+                                                     VkAccelerationStructureGeometryKHR& outGeometry,
+                                                     VkAccelerationStructureGeometryMicromapDataKHR& outMicromapData,
+                                                     std::vector<VkMicromapUsageKHR>& outUsageCounts,
+                                                     VkAccelerationStructureBuildSizesInfoKHR& outSizesInfo) const {
+  LVK_ASSERT(desc.type == AccelStructType_OpacityMicromap);
+  LVK_ASSERT(desc.micromapData.valid());
+  LVK_ASSERT(desc.micromapTriangles.valid());
+  LVK_ASSERT(desc.micromapUsageCounts && desc.micromapNumUsageCounts);
+
+  const lvk::VulkanBuffer* dataBuffer = buffersPool_.get(desc.micromapData);
+  const lvk::VulkanBuffer* trianglesBuffer = buffersPool_.get(desc.micromapTriangles);
+
+  // VUID-vkCmdBuildAccelerationStructuresKHR-micromap-11551
+  LVK_ASSERT(dataBuffer->vkUsageFlags_ & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
+  LVK_ASSERT(trianglesBuffer->vkUsageFlags_ & VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR);
+
+  const VkDeviceAddress data = gpuAddress(desc.micromapData);
+  const VkDeviceAddress triangleArray = gpuAddress(desc.micromapTriangles);
+
+  // VUID-vkCmdBuildAccelerationStructuresKHR-micromap-11552 (guaranteed by createBuffer())
+  LVK_ASSERT(data % 128 == 0 && triangleArray % 128 == 0);
+
+  outUsageCounts.clear();
+  outUsageCounts.reserve(desc.micromapNumUsageCounts);
+
+  uint64_t numTriangles = 0;
+
+  for (uint32_t i = 0; i != desc.micromapNumUsageCounts; i++) {
+    const OpacityMicromapUsage& usage = desc.micromapUsageCounts[i];
+    // VUID-VkAccelerationStructureGeometryMicromapDataKHR-subdivisionLevel-11645
+    // VUID-VkAccelerationStructureBuildGeometryInfoKHR-subdivisionLevel-11564
+    const uint32_t maxSubdivisionLevel = usage.format == OpacityMicromapFormat_2State
+                                             ? opacityMicromapProperties_.maxOpacity2StateSubdivisionLevel
+                                             : opacityMicromapProperties_.maxOpacity4StateSubdivisionLevel;
+    LVK_ASSERT_MSG(usage.subdivisionLevel <= maxSubdivisionLevel, "Opacity micromap subdivision level is not supported");
+    numTriangles += usage.count;
+    outUsageCounts.push_back(VkMicromapUsageKHR{
+        .count = usage.count,
+        .subdivisionLevel = usage.subdivisionLevel,
+        .format = static_cast<VkOpacityMicromapFormatKHR>(usage.format),
+    });
+  }
+
+  // VUID-VkAccelerationStructureGeometryMicromapDataKHR-count-11643
+  LVK_ASSERT(numTriangles <= opacityMicromapProperties_.maxMicromapTriangles);
+  // VUID-vkCmdBuildAccelerationStructuresKHR-micromap-11554
+  LVK_ASSERT(numTriangles * sizeof(VkMicromapTriangleKHR) <= trianglesBuffer->bufferSize_);
+
+  outMicromapData = VkAccelerationStructureGeometryMicromapDataKHR{
+      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_MICROMAP_DATA_KHR,
+      .usageCountsCount = (uint32_t)outUsageCounts.size(),
+      .pUsageCounts = outUsageCounts.data(),
+      .data = data,
+      .triangleArray = triangleArray,
+      .triangleArrayStride = sizeof(VkMicromapTriangleKHR),
+  };
+
+  outGeometry = VkAccelerationStructureGeometryKHR{
+      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_GEOMETRY_KHR,
+      .pNext = &outMicromapData,
+      .geometryType = VK_GEOMETRY_TYPE_MICROMAP_KHR,
+  };
+
+  const VkAccelerationStructureBuildGeometryInfoKHR accelerationBuildGeometryInfo{
+      .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
+      .type = VK_ACCELERATION_STRUCTURE_TYPE_OPACITY_MICROMAP_KHR,
+      .flags = buildFlagsToVkBuildAccelerationStructureFlags(desc.buildFlags),
+      .geometryCount = 1,
+      .pGeometries = &outGeometry,
+  };
+
+  outSizesInfo.sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_SIZES_INFO_KHR;
+  vkGetAccelerationStructureBuildSizesKHR(
+      vkDevice_, VK_ACCELERATION_STRUCTURE_BUILD_TYPE_DEVICE_KHR, &accelerationBuildGeometryInfo, nullptr, &outSizesInfo);
+  const uint32_t alignment = accelerationStructureProperties_.minAccelerationStructureScratchOffsetAlignment;
+  outSizesInfo.accelerationStructureSize += alignment;
   outSizesInfo.buildScratchSize += alignment;
 }
 

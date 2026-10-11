@@ -394,6 +394,8 @@ struct AccelerationStructure {
   lvk::Holder<lvk::BufferHandle> buffer;
   lvk::Holder<lvk::BufferHandle> scratchBuffer; // TLAS, and BLAS built with AllowUpdate
   VkAccelerationStructureGeometryKHR geometry = {};
+  // BLAS only: `geometry.geometry.triangles.pNext` is re-linked here before every use because pool slots move
+  VkAccelerationStructureTrianglesOpacityMicromapKHR opacityMicromap = {};
 };
 
 class CommandBuffer final : public ICommandBuffer {
@@ -738,6 +740,7 @@ class VulkanContext final : public IContext {
                               const char* debugName = nullptr);
   AccelStructHandle createBLAS(const AccelStructDesc& desc, Result* outResult);
   AccelStructHandle createTLAS(const AccelStructDesc& desc, Result* outResult);
+  AccelStructHandle createOpacityMicromap(const AccelStructDesc& desc, Result* outResult);
 
   bool hasSwapchain() const noexcept {
     return swapchain_ != nullptr;
@@ -823,10 +826,16 @@ class VulkanContext final : public IContext {
 
   void getBuildInfoBLAS(const AccelStructDesc& desc,
                         VkAccelerationStructureGeometryKHR& geom,
+                        VkAccelerationStructureTrianglesOpacityMicromapKHR& outOpacityMicromap,
                         VkAccelerationStructureBuildSizesInfoKHR& outSizesInfo) const;
   void getBuildInfoTLAS(const AccelStructDesc& desc,
                         VkAccelerationStructureGeometryKHR& outGeometry,
                         VkAccelerationStructureBuildSizesInfoKHR& outSizesInfo) const;
+  void getBuildInfoOpacityMicromap(const AccelStructDesc& desc,
+                                   VkAccelerationStructureGeometryKHR& outGeometry,
+                                   VkAccelerationStructureGeometryMicromapDataKHR& outMicromapData,
+                                   std::vector<VkMicromapUsageKHR>& outUsageCounts,
+                                   VkAccelerationStructureBuildSizesInfoKHR& outSizesInfo) const;
   void createDummyTLAS();
 
  private:
