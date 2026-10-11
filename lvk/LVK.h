@@ -1072,6 +1072,7 @@ enum AccelStructBuildFlagBits : uint8_t {
   AccelStructBuildFlagBits_PreferFastTrace = 1 << 2,
   AccelStructBuildFlagBits_PreferFastBuild = 1 << 3,
   AccelStructBuildFlagBits_LowMemory = 1 << 4,
+  AccelStructBuildFlagBits_AllowDisableOpacityMicromaps = 1 << 5, // for `AccelStructInstanceFlagBits_DisableOpacityMicromaps`
 };
 
 enum AccelStructGeometryFlagBits : uint8_t {
@@ -1084,6 +1085,8 @@ enum AccelStructInstanceFlagBits : uint8_t {
   AccelStructInstanceFlagBits_TriangleFlipFacing = 1 << 1,
   AccelStructInstanceFlagBits_ForceOpaque = 1 << 2,
   AccelStructInstanceFlagBits_ForceNoOpaque = 1 << 3,
+  AccelStructInstanceFlagBits_ForceOpacityMicromap2State = 1 << 4,
+  AccelStructInstanceFlagBits_DisableOpacityMicromaps = 1 << 5,
 };
 
 struct AccelStructSizes {
