@@ -345,6 +345,9 @@ VkBuildAccelerationStructureFlagsKHR buildFlagsToVkBuildAccelerationStructureFla
   if (buildFlags & lvk::AccelStructBuildFlagBits_AllowDisableOpacityMicromaps) {
     flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DISABLE_OPACITY_MICROMAPS_BIT_KHR;
   }
+  if (buildFlags & lvk::AccelStructBuildFlagBits_AllowDataAccess) {
+    flags |= VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_DATA_ACCESS_BIT_KHR;
+  }
 
   return flags;
 }

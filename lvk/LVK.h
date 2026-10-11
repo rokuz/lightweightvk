@@ -1074,6 +1074,7 @@ enum AccelStructBuildFlagBits : uint8_t {
   AccelStructBuildFlagBits_PreferFastBuild = 1 << 3,
   AccelStructBuildFlagBits_LowMemory = 1 << 4,
   AccelStructBuildFlagBits_AllowDisableOpacityMicromaps = 1 << 5, // for `AccelStructInstanceFlagBits_DisableOpacityMicromaps`
+  AccelStructBuildFlagBits_AllowDataAccess = 1 << 6, // required by VK_KHR_ray_tracing_position_fetch
 };
 
 enum AccelStructGeometryFlagBits : uint8_t {
