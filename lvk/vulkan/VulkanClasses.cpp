@@ -3792,7 +3792,10 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
 
   lvk::AccelerationStructure* as = ctx_->accelStructuresPool_.get(handle);
 
-  LVK_ASSERT_MSG(as->buildFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR,
+  // see createTLAS(): such TLASes are built without AllowUpdate
+  const bool rebuild = ctx_->workaround_noMultiInstanceTLASUpdate_ && as->buildRangeInfo.primitiveCount > 1;
+
+  LVK_ASSERT_MSG((as->buildFlags & VK_BUILD_ACCELERATION_STRUCTURE_ALLOW_UPDATE_BIT_KHR) || rebuild,
                  "TLAS must be created with AccelStructBuildFlagBits_AllowUpdate to be updated");
 
   const VkAccelerationStructureGeometryKHR accelerationStructureGeometry{
@@ -3831,13 +3834,16 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
   accelerationStructureBuildSizesInfo.updateScratchSize += alignment;
   accelerationStructureBuildSizesInfo.buildScratchSize += alignment;
 
-  if (!as->scratchBuffer.valid() || getBufferSize(ctx_, as->scratchBuffer) < accelerationStructureBuildSizesInfo.updateScratchSize) {
+  const VkDeviceSize scratchSize =
+      rebuild ? accelerationStructureBuildSizesInfo.buildScratchSize : accelerationStructureBuildSizesInfo.updateScratchSize;
+
+  if (!as->scratchBuffer.valid() || getBufferSize(ctx_, as->scratchBuffer) < scratchSize) {
     LLOGD("Recreating scratch buffer for TLAS update");
     as->scratchBuffer = ctx_->createBuffer(
         lvk::BufferDesc{
             .usage = lvk::BufferUsageBits_Storage,
             .storage = lvk::StorageType_Device,
-            .size = accelerationStructureBuildSizesInfo.updateScratchSize,
+            .size = scratchSize,
             .debugName = "scratchBuffer",
         },
         nullptr,
@@ -3848,8 +3854,8 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
       .sType = VK_STRUCTURE_TYPE_ACCELERATION_STRUCTURE_BUILD_GEOMETRY_INFO_KHR,
       .type = VK_ACCELERATION_STRUCTURE_TYPE_TOP_LEVEL_KHR,
       .flags = as->buildFlags,
-      .mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR,
-      .srcAccelerationStructure = as->vkHandle,
+      .mode = rebuild ? VK_BUILD_ACCELERATION_STRUCTURE_MODE_BUILD_KHR : VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR,
+      .srcAccelerationStructure = rebuild ? VK_NULL_HANDLE : as->vkHandle,
       .dstAccelerationStructure = as->vkHandle,
       .geometryCount = 1,
       .pGeometries = &accelerationStructureGeometry,
@@ -5850,6 +5856,14 @@ lvk::AccelStructHandle lvk::VulkanContext::createOpacityMicromap(const AccelStru
 }
 
 lvk::AccelStructHandle lvk::VulkanContext::createTLAS(const AccelStructDesc& desc, Result* outResult) {
+  // see cmdUpdateTLAS(): such TLASes are rebuilt instead of updated
+  if (workaround_noMultiInstanceTLASUpdate_ && (desc.buildFlags & AccelStructBuildFlagBits_AllowUpdate) &&
+      desc.buildRange.primitiveCount > 1) {
+    AccelStructDesc descNoUpdate = desc;
+    descNoUpdate.buildFlags &= ~AccelStructBuildFlagBits_AllowUpdate;
+    return createTLAS(descNoUpdate, outResult);
+  }
+
   VkAccelerationStructureGeometryKHR accelerationStructureGeometry{};
   VkAccelerationStructureBuildSizesInfoKHR accelerationStructureBuildSizesInfo{};
   getBuildInfoTLAS(desc, accelerationStructureGeometry, accelerationStructureBuildSizesInfo);
@@ -8332,6 +8346,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   workaround_fixedSizeAccelStructArray_ = strstr(vkPhysicalDeviceProperties2_.properties.deviceName, "Adreno") != nullptr;
   // Adreno 840 cannot handle arrays (of any size) of combined image samplers with YCbCr immutable samplers
   workaround_noYcbcrSamplerArray_ = strstr(vkPhysicalDeviceProperties2_.properties.deviceName, "Adreno (TM) 840") != nullptr;
+  workaround_noMultiInstanceTLASUpdate_ = strstr(vkPhysicalDeviceProperties2_.properties.deviceName, "Adreno (TM) 840") != nullptr;
 
   LLOGL("Vulkan physical device: %s\n", vkPhysicalDeviceProperties2_.properties.deviceName);
   LLOGL("           API version: %i.%i.%i.%i\n",

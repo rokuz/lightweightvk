@@ -944,6 +944,8 @@ class VulkanContext final : public IContext {
   bool workaround_fixedSizeAccelStructArray_ = false;
   // Adreno GPUs do not support arrays (of any size) of combined image samplers with YCbCr immutable samplers - use one non-array sampler
   bool workaround_noYcbcrSamplerArray_ = false;
+  // Adreno 840 returns no hits from a TLAS with multiple instances built with AllowUpdate - build it without and rebuild it on updates
+  bool workaround_noMultiInstanceTLASUpdate_ = false;
 
   bool has_KHR_acceleration_structure_ = false;
   bool has_KHR_ray_query_ = false;
