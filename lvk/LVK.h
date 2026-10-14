@@ -1096,14 +1096,6 @@ enum OpacityMicromapFormat : uint8_t {
   OpacityMicromapFormat_4State = 2, // 2 bits per micro-triangle: transparent, opaque, unknown-transparent, unknown-opaque
 };
 
-// unknown states are resolved by any-hit shaders or ray query candidates
-enum OpacityMicromapState : uint8_t {
-  OpacityMicromapState_Transparent = 0,
-  OpacityMicromapState_Opaque = 1,
-  OpacityMicromapState_UnknownTransparent = 2,
-  OpacityMicromapState_UnknownOpaque = 3,
-};
-
 // whole-triangle values in `AccelStructDesc::micromapIndexBuffer`
 enum OpacityMicromapSpecialIndex : int32_t {
   OpacityMicromapSpecialIndex_FullyTransparent = -1,
@@ -1168,7 +1160,7 @@ struct AccelStructDesc {
   BufferHandle instancesBuffer;
   AccelStructHandle micromap; // BLAS: optional
   BufferHandle micromapIndexBuffer; // BLAS: indices into `micromap` triangles or `OpacityMicromapSpecialIndex` values
-  BufferHandle micromapData; // packed micro-triangle states
+  BufferHandle micromapData; // packed micro-triangle states: 0 transparent, 1 opaque, 2 unknown-transparent, 3 unknown-opaque
   BufferHandle micromapTriangles; // OpacityMicromapTriangle[]
   IndexFormat micromapIndexFormat = IndexFormat_UI32;
   uint32_t micromapIndexOffset = 0; // in bytes
