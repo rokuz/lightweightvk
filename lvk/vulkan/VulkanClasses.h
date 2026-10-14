@@ -912,6 +912,7 @@ class VulkanContext final : public IContext {
   };
   VkPhysicalDeviceFragmentShadingRatePropertiesKHR vkFragmentShadingRateProperties_ = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADING_RATE_PROPERTIES_KHR};
+  VkPhysicalDeviceTensorPropertiesARM vkTensorProperties_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_PROPERTIES_ARM};
 
   std::vector<VkFormat> deviceDepthFormats_;
   std::vector<VkSurfaceFormat2KHR> deviceSurfaceFormats_;

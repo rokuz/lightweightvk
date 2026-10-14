@@ -8311,6 +8311,7 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     addNextPhysicalDeviceProperties(&vkFragmentShadingRateProperties_);
   }
   if (hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, allDeviceExtensions)) {
+    addNextPhysicalDeviceProperties(&vkTensorProperties_);
     vkTensorFeatures_.pNext = vkFeatures10_.pNext;
     vkFeatures10_.pNext = &vkTensorFeatures_;
   }
