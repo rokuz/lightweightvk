@@ -8594,6 +8594,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROVOKING_VERTEX_FEATURES_EXT,
       .provokingVertexLast = VK_TRUE,
   };
+  VkPhysicalDeviceShaderReplicatedCompositesFeaturesEXT shaderReplicatedCompositesFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_REPLICATED_COMPOSITES_FEATURES_EXT,
+      .shaderReplicatedComposites = VK_TRUE,
+  };
   VkPhysicalDeviceFragmentShaderInterlockFeaturesEXT fragmentShaderInterlockFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_INTERLOCK_FEATURES_EXT,
       .fragmentShaderSampleInterlock = VK_TRUE,
@@ -8731,6 +8735,8 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
                        has_EXT_dynamic_rendering_unused_attachments_,
                        &dynamicRenderingUnusedAttachmentsFeatures);
   addOptionalExtension(VK_EXT_PROVOKING_VERTEX_EXTENSION_NAME, has_EXT_provoking_vertex_, &provokingVertexFeatures);
+  addOptionalExtension(
+      VK_EXT_SHADER_REPLICATED_COMPOSITES_EXTENSION_NAME, has_EXT_shader_replicated_composites_, &shaderReplicatedCompositesFeatures);
   addOptionalExtension(
       VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, has_EXT_fragment_shader_interlock_, &fragmentShaderInterlockFeatures);
   addOptionalExtension(VK_KHR_SHARED_PRESENTABLE_IMAGE_EXTENSION_NAME, has_KHR_shared_presentable_image_);
