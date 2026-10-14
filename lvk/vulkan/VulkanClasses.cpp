@@ -8541,7 +8541,11 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   };
   VkPhysicalDeviceTensorFeaturesARM tensorFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM,
+      .tensorNonPacked = vkTensorFeatures_.tensorNonPacked,
       .shaderTensorAccess = VK_TRUE,
+      .shaderStorageTensorArrayDynamicIndexing = VK_TRUE,
+      .shaderStorageTensorArrayNonUniformIndexing = vkTensorFeatures_.shaderStorageTensorArrayNonUniformIndexing,
+      .descriptorBindingStorageTensorUpdateAfterBind = VK_TRUE,
       .tensors = VK_TRUE,
   };
   VkPhysicalDeviceDataGraphFeaturesARM dataGraphFeatures = {
@@ -8700,8 +8704,11 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     addOptionalExtension(VK_KHR_OPACITY_MICROMAP_EXTENSION_NAME, has_KHR_opacity_micromap_, &opacityMicromapFeatures);
   }
   // only ask for the feature bits the device reports, otherwise vkCreateDevice() fails
-  if (vkTensorFeatures_.tensors && vkTensorFeatures_.shaderTensorAccess) {
+  if (vkTensorFeatures_.tensors && vkTensorFeatures_.shaderTensorAccess && vkTensorFeatures_.shaderStorageTensorArrayDynamicIndexing &&
+      vkTensorFeatures_.descriptorBindingStorageTensorUpdateAfterBind && vkTensorProperties_.shaderTensorSupportedStages) {
     addOptionalExtension(VK_ARM_TENSORS_EXTENSION_NAME, has_ARM_tensors_, &tensorFeatures);
+  } else if (hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, allDeviceExtensions)) {
+    LLOGW("VK_ARM_tensors is present but lacks the features required for bindless tensors (update-after-bind, dynamic indexing)\n");
   }
   if (has_ARM_tensors_ && vkDataGraphFeatures_.dataGraph && vkDataGraphFeatures_.dataGraphShaderModule) {
     // data graphs consume tensors, and their pipelines are built through VK_KHR_deferred_host_operations
