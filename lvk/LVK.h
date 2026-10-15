@@ -1465,6 +1465,7 @@ typedef struct SDL_MouseButtonEvent SDL_MouseButtonEvent;
 namespace lvk {
 
 constexpr uint32_t kMaxCustomExtensions = 32;
+constexpr uint32_t kMaxCustomLayers = 8;
 constexpr uint32_t kMaxPresentModes = 8;
 
 enum VulkanVersion {
@@ -1494,6 +1495,7 @@ struct ContextConfig {
       PresentMode_FIFO_Relaxed,
       PresentMode_FIFO,
   };
+  const char* layers[kMaxCustomLayers] = {}; // enable extra instance layers before the validation layer
   const char* extensionsInstance[kMaxCustomExtensions] = {}; // add extra instance extensions on top of required ones
   const char* extensionsDevice[kMaxCustomExtensions] = {}; // add extra device extensions on top of required ones
   void* extensionsDeviceFeatures = nullptr; // inserted into VkPhysicalDeviceVulkan11Features::pNext

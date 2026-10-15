@@ -7690,6 +7690,17 @@ lvk::Result lvk::VulkanContext::createInstance() {
     }();
   }
 
+  // custom layers go first (closest to the application), so the validation layer checks the calls they emit
+  std::vector<const char*> enabledLayers;
+  for (const char* layer : config_.layers) {
+    if (layer) {
+      enabledLayers.push_back(layer);
+    }
+  }
+  if (config_.enableValidation) {
+    enabledLayers.insert(enabledLayers.end(), std::begin(kDefaultValidationLayers), std::end(kDefaultValidationLayers));
+  }
+
   std::vector<VkExtensionProperties> allInstanceExtensions;
   {
     uint32_t count = 0;
@@ -7697,16 +7708,17 @@ lvk::Result lvk::VulkanContext::createInstance() {
     allInstanceExtensions.resize(count);
     VK_ASSERT(vkEnumerateInstanceExtensionProperties(nullptr, &count, allInstanceExtensions.data()));
   }
-  // collect instance extensions from all validation layers
-  if (config_.enableValidation) {
-    for (const char* layer : kDefaultValidationLayers) {
-      uint32_t count = 0;
-      VK_ASSERT(vkEnumerateInstanceExtensionProperties(layer, &count, nullptr));
-      if (count > 0) {
-        const size_t sz = allInstanceExtensions.size();
-        allInstanceExtensions.resize(sz + count);
-        VK_ASSERT(vkEnumerateInstanceExtensionProperties(layer, &count, allInstanceExtensions.data() + sz));
-      }
+  // collect instance extensions from all enabled layers
+  for (const char* layer : enabledLayers) {
+    uint32_t count = 0;
+    if (const VkResult result = vkEnumerateInstanceExtensionProperties(layer, &count, nullptr); result != VK_SUCCESS) {
+      LLOGW("Vulkan layer `%s` is not available (%s)\n", layer, lvk::getVulkanResultString(result));
+      continue; // vkCreateInstance() will fail
+    }
+    if (count > 0) {
+      const size_t sz = allInstanceExtensions.size();
+      allInstanceExtensions.resize(sz + count);
+      VK_ASSERT(vkEnumerateInstanceExtensionProperties(layer, &count, allInstanceExtensions.data() + sz));
     }
   }
 
@@ -7852,8 +7864,8 @@ lvk::Result lvk::VulkanContext::createInstance() {
       .pNext = hasExtension(VK_EXT_LAYER_SETTINGS_EXTENSION_NAME, allInstanceExtensions) ? &layerSettingsCreateInfo : nullptr,
       .flags = hasPortabilityEnumeration ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR : 0u,
       .pApplicationInfo = &appInfo,
-      .enabledLayerCount = config_.enableValidation ? (uint32_t)LVK_ARRAY_NUM_ELEMENTS(kDefaultValidationLayers) : 0u,
-      .ppEnabledLayerNames = config_.enableValidation ? kDefaultValidationLayers : nullptr,
+      .enabledLayerCount = (uint32_t)enabledLayers.size(),
+      .ppEnabledLayerNames = enabledLayers.data(),
       .enabledExtensionCount = (uint32_t)enabledInstanceExtensionNames_.size(),
       .ppEnabledExtensionNames = enabledInstanceExtensionNames_.data(),
   };
@@ -8283,6 +8295,11 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
 
   std::vector<VkExtensionProperties> allDeviceExtensions;
   getDeviceExtensionProps(vkPhysicalDevice_, allDeviceExtensions);
+  for (const char* layer : config_.layers) {
+    if (layer) {
+      getDeviceExtensionProps(vkPhysicalDevice_, allDeviceExtensions, layer);
+    }
+  }
   if (config_.enableValidation) {
     for (const char* layer : kDefaultValidationLayers) {
       getDeviceExtensionProps(vkPhysicalDevice_, allDeviceExtensions, layer);
