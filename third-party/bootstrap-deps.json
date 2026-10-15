@@ -164,7 +164,7 @@
     "source": {
         "type": "git",
         "url": "https://github.com/ocornut/imgui.git",
-        "revision": "v1.92.9b"
+        "revision": "v1.93.0"
     }
 },
 {
@@ -172,7 +172,7 @@
     "source": {
         "type": "git",
         "url": "https://github.com/epezent/implot",
-        "revision": "d65a2bef53d32502407de3a4be80f191e2f412d7"
+        "revision": "851cdbdd60d1dfb64c23e987969694de0f547a6b"
     }
 },
 {
@@ -280,7 +280,7 @@
     "source": {
         "type": "git",
         "url": "https://github.com/corporateshark/lightweightvk_screenshot_tests",
-        "revision": "132a10b6a3f0cdd0c54309cdfc9ad580a9dc53fb",
+        "revision": "74cc705c229df17b17a5b893d10a03febcef442b",
         "recursive": false
     }
 }
