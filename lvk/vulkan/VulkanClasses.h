@@ -361,6 +361,8 @@ struct RayTracingPipelineState final {
   std::vector<ShaderModuleHandle> smCallable_;
   std::vector<RayTracingHitGroupDesc> hitGroups_;
   SpecializationConstantDesc specInfo_ = {};
+  uint32_t maxRecursionDepth_ = 0;
+  uint32_t stackSize_ = 0;
   const char* debugName_ = "";
 
   // non-owning, the last seen VkDescriptorSetLayout from VulkanContext::vkDSL_ (invalidate all VkPipeline objects on new layout)

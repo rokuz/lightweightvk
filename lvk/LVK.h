@@ -845,6 +845,8 @@ struct RayTracingPipelineDesc final {
   ldr::Span<ShaderModuleHandle> smCallable = {};
   ldr::Span<RayTracingHitGroupDesc> hitGroups = {}; // hit groups - one per material
   SpecializationConstantDesc specInfo = {};
+  uint32_t maxRecursionDepth = 0; // 0 = ContextConfig::maxRayRecursionDepth
+  uint32_t stackSize = 0; // in bytes; 0 = driver default
   const char* debugName = "";
 };
 
@@ -1485,6 +1487,7 @@ struct ContextConfig {
   // owned by the application - should be alive until createVulkanContextWithSwapchain() returns
   const void* pipelineCacheData = nullptr;
   size_t pipelineCacheDataSize = 0;
+  uint32_t maxRayRecursionDepth = 0; // default for ray tracing pipelines (clamped to the device limit); 0 = device maximum
   // Define preferred present modes, the first available present mode will  be used. PresentMode_FIFO is always available
   lvk::PresentMode presentModes[kMaxPresentModes] = {
 #if defined(__linux__) || defined(_M_ARM64)
