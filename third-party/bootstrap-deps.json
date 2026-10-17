@@ -283,5 +283,35 @@
         "revision": "74cc705c229df17b17a5b893d10a03febcef442b",
         "recursive": false
     }
+},
+{
+    "name": "ml-sdk/emulation-layer",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/rokuz/ai-ml-emulation-layer-for-vulkan.git",
+        "revision": "249c24c73157efd3b22edc76612f1239718e5528",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/SPIRV-Cross",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/KhronosGroup/SPIRV-Cross.git",
+        "revision": "vulkan-sdk-1.4.357.0",
+        "recursive": false
+    }
+},
+{
+    "name": "ml-sdk/json",
+    "predicate": "os.environ.get('LVK_WITH_ML_EMULATION_LAYER') == 'ON'",
+    "source": {
+        "type": "git",
+        "url": "https://github.com/nlohmann/json.git",
+        "revision": "v3.12.0",
+        "recursive": false
+    }
 }
 ]
