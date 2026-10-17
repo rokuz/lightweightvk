@@ -8772,7 +8772,18 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   } else if (hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, allDeviceExtensions)) {
     LLOGW("VK_ARM_tensors is present but lacks the features required for bindless tensors (update-after-bind, dynamic indexing)\n");
   }
-  if (has_ARM_tensors_ && vkDataGraphFeatures_.dataGraph && vkDataGraphFeatures_.dataGraphShaderModule) {
+  // data graphs are dispatched on the graphics queue, so its queue family has to support them
+  auto hasDataGraphQueue = [this]() -> bool {
+    uint32_t numQueueFamilies = 0;
+    vkGetPhysicalDeviceQueueFamilyProperties2(vkPhysicalDevice_, &numQueueFamilies, nullptr);
+    std::vector<VkQueueFamilyProperties2> queueFamilies(numQueueFamilies, {.sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2});
+    vkGetPhysicalDeviceQueueFamilyProperties2(vkPhysicalDevice_, &numQueueFamilies, queueFamilies.data());
+    const uint32_t idx = deviceQueues_.graphicsQueueFamilyIndex;
+    return idx < numQueueFamilies && (queueFamilies[idx].queueFamilyProperties.queueFlags & VK_QUEUE_DATA_GRAPH_BIT_ARM);
+  };
+  if (has_ARM_tensors_ && vkDataGraphFeatures_.dataGraph && vkDataGraphFeatures_.dataGraphShaderModule && !hasDataGraphQueue()) {
+    LLOGW("VK_ARM_data_graph: the graphics queue family does not support data graph dispatches\n");
+  } else if (has_ARM_tensors_ && vkDataGraphFeatures_.dataGraph && vkDataGraphFeatures_.dataGraphShaderModule) {
     // data graphs consume tensors, and their pipelines are built through VK_KHR_deferred_host_operations
     bool hasDeferredHostOperations = has_KHR_acceleration_structure_;
     if (!hasDeferredHostOperations) {
