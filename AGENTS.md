@@ -129,6 +129,7 @@ To check CI status: `gh run list` or `gh run view <run-id>`.
 - No STL containers in public API; the only exception is `std::vector` which is allowed in `.cpp` files and samples
 - Use `()` after function names in code comments and commit messages (e.g., `// call doSomething() first`)
 - Instead of deep nested if-blocks, prefer early exit
+- `const char* debugName` (or `debugName_`) is always the last member field of a struct; add new fields before it
 - **Use `const` on local variables whenever possible**
 - **NEVER use `auto` except for lambda types** — always use explicit types
 - **NEVER use `goto`**
