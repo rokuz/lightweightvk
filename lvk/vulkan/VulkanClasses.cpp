@@ -3869,11 +3869,16 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
 
   const VkAccelerationStructureBuildRangeInfoKHR* accelerationBuildStructureRangeInfos[] = {&as->buildRangeInfo};
 
+  const VkPipelineStageFlags2 readStages =
+      VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+      (ctx_->has_EXT_mesh_shader_ ? VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT : 0) |
+      (ctx_->has_KHR_ray_tracing_pipeline_ ? VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR : 0);
+
   {
     const VkBufferMemoryBarrier2 barriers[] = {
         {
             .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
-            .srcStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+            .srcStageMask = readStages,
             .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT,
             .dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
             .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
@@ -3903,7 +3908,7 @@ void lvk::CommandBuffer::cmdUpdateTLAS(AccelStructHandle handle, BufferHandle in
         .sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER_2,
         .srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
         .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        .dstStageMask = readStages,
         .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT,
         .buffer = getVkBuffer(ctx_, handle),
         .offset = 0,
@@ -3949,11 +3954,15 @@ void lvk::CommandBuffer::cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handl
     ranges.push_back(&as->buildRangeInfo);
   }
 
+  const VkPipelineStageFlags2 readStages =
+      VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT | VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT |
+      (ctx_->has_EXT_mesh_shader_ ? VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT | VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT : 0) |
+      (ctx_->has_KHR_ray_tracing_pipeline_ ? VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR : 0);
+
   {
     const VkMemoryBarrier2 barrier = {
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
-        .srcStageMask = VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT |
-                        VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        .srcStageMask = VK_PIPELINE_STAGE_2_ALL_TRANSFER_BIT | readStages,
         .srcAccessMask = VK_ACCESS_2_MEMORY_WRITE_BIT | VK_ACCESS_2_MEMORY_READ_BIT,
         .dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
         .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
@@ -3971,7 +3980,7 @@ void lvk::CommandBuffer::cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handl
         .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
         .srcStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR,
         .srcAccessMask = VK_ACCESS_2_MEMORY_READ_BIT | VK_ACCESS_2_MEMORY_WRITE_BIT,
-        .dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | VK_PIPELINE_STAGE_2_RAY_TRACING_SHADER_BIT_KHR,
+        .dstStageMask = VK_PIPELINE_STAGE_2_ACCELERATION_STRUCTURE_BUILD_BIT_KHR | readStages,
         .dstAccessMask = VK_ACCESS_2_MEMORY_READ_BIT,
     };
     const VkDependencyInfo dependencyInfo{
