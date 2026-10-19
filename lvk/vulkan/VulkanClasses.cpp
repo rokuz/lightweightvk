@@ -8390,6 +8390,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     vkDataGraphFeatures_.pNext = vkFeatures10_.pNext;
     vkFeatures10_.pNext = &vkDataGraphFeatures_;
   }
+  if (hasExtension(VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME, allDeviceExtensions)) {
+    vkComputeShaderDerivativesFeatures_.pNext = vkFeatures10_.pNext;
+    vkFeatures10_.pNext = &vkComputeShaderDerivativesFeatures_;
+  }
   if (hasExtension(VK_KHR_OPACITY_MICROMAP_EXTENSION_NAME, allDeviceExtensions)) {
     addNextPhysicalDeviceProperties(&opacityMicromapProperties_);
   }
@@ -8624,6 +8628,11 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
       .dataGraph = VK_TRUE,
       .dataGraphShaderModule = VK_TRUE,
   };
+  VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR computeShaderDerivativesFeatures = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR,
+      .computeDerivativeGroupQuads = vkComputeShaderDerivativesFeatures_.computeDerivativeGroupQuads,
+      .computeDerivativeGroupLinear = vkComputeShaderDerivativesFeatures_.computeDerivativeGroupLinear,
+  };
   VkPhysicalDeviceRayTracingInvocationReorderFeaturesEXT rayTracingInvocationReorderFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_RAY_TRACING_INVOCATION_REORDER_FEATURES_EXT,
       .rayTracingInvocationReorder = VK_TRUE,
@@ -8769,6 +8778,10 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
                         has_KHR_acceleration_structure_,
                         &accelerationStructureFeatures);
   addOptionalExtension(VK_KHR_RAY_QUERY_EXTENSION_NAME, has_KHR_ray_query_, &rayQueryFeatures);
+  if (vkComputeShaderDerivativesFeatures_.computeDerivativeGroupQuads || vkComputeShaderDerivativesFeatures_.computeDerivativeGroupLinear) {
+    addOptionalExtension(
+        VK_KHR_COMPUTE_SHADER_DERIVATIVES_EXTENSION_NAME, has_KHR_compute_shader_derivatives_, &computeShaderDerivativesFeatures);
+  }
   addOptionalExtension(VK_KHR_DEVICE_ADDRESS_COMMANDS_EXTENSION_NAME, has_KHR_device_address_commands_, &deviceAddressCommandsFeatures);
   if (has_KHR_acceleration_structure_ && has_KHR_device_address_commands_) {
     // opacity micromaps only be created with vkCreateAccelerationStructure2KHR()

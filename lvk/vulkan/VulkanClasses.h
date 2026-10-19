@@ -884,6 +884,8 @@ class VulkanContext final : public IContext {
   // queried (not chained by default) - only added to vkFeatures10_ when VK_ARM_tensors / VK_ARM_data_graph are supported
   VkPhysicalDeviceTensorFeaturesARM vkTensorFeatures_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM};
   VkPhysicalDeviceDataGraphFeaturesARM vkDataGraphFeatures_ = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DATA_GRAPH_FEATURES_ARM};
+  VkPhysicalDeviceComputeShaderDerivativesFeaturesKHR vkComputeShaderDerivativesFeatures_ = {
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COMPUTE_SHADER_DERIVATIVES_FEATURES_KHR};
   // only queried when VK_KHR_opacity_micromap is supported
   VkPhysicalDeviceOpacityMicromapPropertiesKHR opacityMicromapProperties_ = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_OPACITY_MICROMAP_PROPERTIES_KHR};
@@ -968,6 +970,7 @@ class VulkanContext final : public IContext {
   bool has_EXT_shader_replicated_composites_ = false;
   bool has_EXT_fragment_shader_interlock_ = false;
   bool has_MVK_macos_surface_ = false;
+  bool has_KHR_compute_shader_derivatives_ = false;
   bool has_KHR_shared_presentable_image_ = false;
   bool has_KHR_present_mode_fifo_latest_ready_ = false;
   bool has_KHR_maintenance6_ = false; // promoted to Vulkan 1.4
