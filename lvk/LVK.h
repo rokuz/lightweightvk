@@ -1445,6 +1445,8 @@ class IContext {
   [[nodiscard]] virtual uint32_t getMultiviewMaxViewCount() const = 0;
   [[nodiscard]] virtual uint32_t getMultiviewMaxMeshViewCount() const = 0;
 
+  [[nodiscard]] virtual size_t getPipelineCacheData(void* outData, size_t dataSize) const = 0; // nullptr `outData` -> required size
+
 #pragma region Performance queries
   virtual double getTimestampPeriodToMs() const = 0;
   virtual bool getQueryPoolResults(QueryPoolHandle pool,
@@ -1489,7 +1491,7 @@ struct ContextConfig {
   lvk::ColorSpace swapchainRequestedColorSpace = lvk::ColorSpace_SRGB_NONLINEAR;
   bool swapchainUseSurfacePreTransform = false; // apps should rotate their own output based on getSwapchainSurfaceTransform()
   // owned by the application - should be alive until createVulkanContextWithSwapchain() returns
-  const void* pipelineCacheData = nullptr;
+  const void* pipelineCacheData = nullptr; // see IContext::getPipelineCacheData()
   size_t pipelineCacheDataSize = 0;
   uint32_t maxRayRecursionDepth = 0; // default for ray tracing pipelines (clamped to the device limit); 0 = device maximum
   // Define preferred present modes, the first available present mode will  be used. PresentMode_FIFO is always available
