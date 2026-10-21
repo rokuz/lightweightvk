@@ -29,9 +29,10 @@
    void cancelLoadingMaterialTextures()
 
  `loadMaterialTextures()` returns immediately; call `processLoadedMaterialTextures()` once per frame to upload whatever
- is ready. The result is stored in the global variable:
+ is ready. The result is stored in the global variables:
 
    std::vector<GPUMaterial> materials_;
+   std::vector<uint8_t> materialsAlphaTested_; // any texel with alpha below 250
 
  With `loadMaterialMaps`, the `map_Ks` (specular) and `map_bump` (normal) textures are loaded too, into `texSpecular` and
  `texNormal` (otherwise they stay 0, meaning "no texture").
@@ -351,6 +352,7 @@ struct GPUMaterial {
 static_assert(sizeof(GPUMaterial) % 16 == 0);
 
 std::vector<GPUMaterial> materials_;
+std::vector<uint8_t> materialsAlphaTested_;
 
 struct LoadedImage {
   uint32_t w = 0;
@@ -359,6 +361,7 @@ struct LoadedImage {
   uint8_t* pixels = nullptr;
   std::string debugName;
   std::string compressedFileName;
+  bool hasTransparentTexels = false;
 };
 
 struct LoadedMaterial {
@@ -497,7 +500,7 @@ void generateCompressedTexture(LoadedImage img) {
   ktxTexture_WriteToNamedFile(ktxTexture(textureKTX1), img.compressedFileName.c_str());
 }
 
-LoadedImage loadImage(const char* fileName, int channels) {
+LoadedImage loadImage(const char* fileName, int channels, bool scanAlpha) {
   LVK_PROFILER_FUNCTION();
 
   if (!fileName || !*fileName) {
@@ -523,8 +526,19 @@ LoadedImage loadImage(const char* fileName, int channels) {
 
   int w = 0;
   int h = 0;
+  int fileChannels = 0;
   const std::vector<uint8_t> fileData = texturesApp_->loadFile(fileName);
-  uint8_t* pixels = fileData.empty() ? nullptr : stbi_load_from_memory(fileData.data(), (int)fileData.size(), &w, &h, nullptr, channels);
+  uint8_t* pixels = fileData.empty() ? nullptr
+                                     : stbi_load_from_memory(fileData.data(), (int)fileData.size(), &w, &h, &fileChannels, channels);
+
+  bool hasTransparentTexels = false;
+
+  if (scanAlpha && pixels && (channels == 1 || fileChannels == 2 || fileChannels == 4)) {
+    const size_t numPixels = size_t(w) * size_t(h);
+    for (size_t p = 0; p != numPixels && !hasTransparentTexels; p++) {
+      hasTransparentTexels = pixels[p * channels + channels - 1] < 250;
+    }
+  }
 
   const LoadedImage img = {
       .w = (uint32_t)w,
@@ -533,6 +547,7 @@ LoadedImage loadImage(const char* fileName, int channels) {
       .pixels = pixels,
       .debugName = debugName,
       .compressedFileName = convertFileName(fileName),
+      .hasTransparentTexels = hasTransparentTexels,
   };
 
   if (img.pixels && kEnableTextureCompression && (channels != 1) && !std::filesystem::exists(img.compressedFileName.c_str())) {
@@ -553,21 +568,23 @@ void loadMaterial(size_t i) {
     remainingMaterialsToLoad_.fetch_sub(1u, std::memory_order_release);
   };
 
-#define LOAD_TEX(result, tex, channels, enabled)                                                                 \
-  const LoadedImage result = !(enabled) || std::string(cachedMaterials_[i].tex).empty()                          \
-                                 ? LoadedImage()                                                                 \
-                                 : loadImage((texturesPathPrefix_ + cachedMaterials_[i].tex).c_str(), channels); \
-  if (loaderShouldExit_.load(std::memory_order_acquire)) {                                                       \
-    return;                                                                                                      \
+#define LOAD_TEX(result, tex, channels, enabled, scanAlpha)                                                                 \
+  const LoadedImage result = !(enabled) || std::string(cachedMaterials_[i].tex).empty()                                     \
+                                 ? LoadedImage()                                                                            \
+                                 : loadImage((texturesPathPrefix_ + cachedMaterials_[i].tex).c_str(), channels, scanAlpha); \
+  if (loaderShouldExit_.load(std::memory_order_acquire)) {                                                                  \
+    return;                                                                                                                 \
   }
 
-  LOAD_TEX(ambient, ambient_texname, 4, true);
-  LOAD_TEX(diffuse, diffuse_texname, 4, true);
-  LOAD_TEX(alpha, alpha_texname, 1, true);
-  LOAD_TEX(specular, specular_texname, 4, loadMaterialMaps_);
-  LOAD_TEX(normal, normal_texname, 4, loadMaterialMaps_);
+  LOAD_TEX(ambient, ambient_texname, 4, true, true);
+  LOAD_TEX(diffuse, diffuse_texname, 4, true, true);
+  LOAD_TEX(alpha, alpha_texname, 1, true, true);
+  LOAD_TEX(specular, specular_texname, 4, loadMaterialMaps_, false);
+  LOAD_TEX(normal, normal_texname, 4, loadMaterialMaps_, false);
 
 #undef LOAD_TEX
+
+  materialsAlphaTested_[i] = diffuse.hasTransparentTexels || alpha.hasTransparentTexels ? 1 : 0;
 
   const LoadedMaterial mtl{i, ambient, diffuse, alpha, specular, normal};
 
@@ -668,6 +685,7 @@ void loadMaterialTextures(VulkanApp& app, const char* pathPrefix, bool loadMater
 
   materials_.clear();
   materials_.reserve(cachedMaterials_.size());
+  materialsAlphaTested_.assign(cachedMaterials_.size(), 0);
 
   for (const CachedMaterial& mtl : cachedMaterials_) {
     materials_.push_back(GPUMaterial{
