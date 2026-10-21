@@ -7,6 +7,22 @@
     }
 },
 {
+    "name": "nlg",
+    "source": {
+        "type": "sourcefile",
+        "url": "https://huggingface.co/rokuz7/nlg/resolve/main/nlg.vgf",
+        "sha1": "126e175bea8a3a14228608a0de8e446e67f9c3ad"
+    }
+},
+{
+    "name": "nlg",
+    "source": {
+        "type": "sourcefile",
+        "url": "https://huggingface.co/rokuz7/nlg/resolve/main/nlg.bin",
+        "sha1": "4020380a15f97bfa49d09c52dd165be453124849"
+    }
+},
+{
     "name": "bistro/PropTextures",
     "source": {
         "type": "archive",

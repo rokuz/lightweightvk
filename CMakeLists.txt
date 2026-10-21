@@ -482,6 +482,13 @@ if(LVK_WITH_SAMPLES)
   # cmake-format: on
   add_subdirectory(third-party/deps/src/ldrutils)
   lvk_set_folder(LUtils "third-party")
+  if(CMAKE_HOST_WIN32)
+    find_package(Git QUIET)
+    if(GIT_EXECUTABLE)
+      get_filename_component(LVK_GIT_DIR "${GIT_EXECUTABLE}" DIRECTORY)
+      find_program(BASH_EXECUTABLE bash HINTS "${LVK_GIT_DIR}/../bin" "${LVK_GIT_DIR}/../../bin" NO_DEFAULT_PATH)
+    endif()
+  endif()
   add_subdirectory(third-party/deps/src/ktx-software/lib)
   # patch LIBKTX: this file interferes with normal Vulkan headers
   list(REMOVE_ITEM LIBKTX_MAIN_SRC "../external/dfdutils/vulkan/vulkan_core.h")
