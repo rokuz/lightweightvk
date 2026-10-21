@@ -22,16 +22,22 @@
  and their material textures, loaded asynchronously and transcoded to BC7 on the first run (the transcoded ones are
  cached next to the content root):
 
-   void loadMaterialTextures(VulkanApp& app, const char* pathPrefix)
-   bool processLoadedMaterialTextures(lvk::ICommandBuffer& buffer, lvk::BufferHandle materialsBuffer)
+   void loadMaterialTextures(VulkanApp& app, const char* pathPrefix, const char* mtlFileName = nullptr)
+   bool processLoadedMaterialTextures(lvk::ICommandBuffer& buffer, lvk::BufferHandle materialsBuffer, lvk::BufferHandle mapsBuffer = {})
    uint32_t numRemainingMaterialTextures()
    void drawMaterialTexturesLoadingProgress()
    void cancelLoadingMaterialTextures()
 
  `loadMaterialTextures()` returns immediately; call `processLoadedMaterialTextures()` once per frame to upload whatever
- is ready. The result is stored in the global variable:
+ is ready. The result is stored in the global variables:
 
    std::vector<GPUMaterial> materials_;
+   std::vector<uint8_t> materialsAlphaTested_; // any texel with alpha below 250
+
+ With `mtlFileName`, the `map_Ks` (specular color and gloss in alpha) and `map_bump` (tangent-space normals) textures
+ that the MTL file names are loaded too, into `materialMaps_` (uploaded to `mapsBuffer`):
+
+   std::vector<GPUMaterialMaps> materialMaps_;
 */
 
 #pragma once
@@ -339,7 +345,16 @@ struct GPUMaterial {
 
 static_assert(sizeof(GPUMaterial) % 16 == 0);
 
+struct GPUMaterialMaps {
+  uint32_t texSpecular = 0;
+  uint32_t texNormal = 0;
+};
+
 std::vector<GPUMaterial> materials_;
+std::vector<uint8_t> materialsAlphaTested_;
+std::vector<GPUMaterialMaps> materialMaps_;
+std::vector<std::string> materialSpecularNames_;
+std::vector<std::string> materialNormalNames_;
 
 struct LoadedImage {
   uint32_t w = 0;
@@ -348,6 +363,7 @@ struct LoadedImage {
   uint8_t* pixels = nullptr;
   std::string debugName;
   std::string compressedFileName;
+  bool hasTransparentTexels = false;
 };
 
 struct LoadedMaterial {
@@ -355,6 +371,8 @@ struct LoadedMaterial {
   LoadedImage ambient;
   LoadedImage diffuse;
   LoadedImage alpha;
+  LoadedImage specular;
+  LoadedImage normal;
 };
 
 VulkanApp* texturesApp_ = nullptr;
@@ -483,7 +501,7 @@ void generateCompressedTexture(LoadedImage img) {
   ktxTexture_WriteToNamedFile(ktxTexture(textureKTX1), img.compressedFileName.c_str());
 }
 
-LoadedImage loadImage(const char* fileName, int channels) {
+LoadedImage loadImage(const char* fileName, int channels, bool scanAlpha) {
   LVK_PROFILER_FUNCTION();
 
   if (!fileName || !*fileName) {
@@ -509,8 +527,19 @@ LoadedImage loadImage(const char* fileName, int channels) {
 
   int w = 0;
   int h = 0;
+  int fileChannels = 0;
   const std::vector<uint8_t> fileData = texturesApp_->loadFile(fileName);
-  uint8_t* pixels = fileData.empty() ? nullptr : stbi_load_from_memory(fileData.data(), (int)fileData.size(), &w, &h, nullptr, channels);
+  uint8_t* pixels = fileData.empty() ? nullptr
+                                     : stbi_load_from_memory(fileData.data(), (int)fileData.size(), &w, &h, &fileChannels, channels);
+
+  bool hasTransparentTexels = false;
+
+  if (scanAlpha && pixels && (channels == 1 || fileChannels == 2 || fileChannels == 4)) {
+    const size_t numPixels = size_t(w) * size_t(h);
+    for (size_t p = 0; p != numPixels && !hasTransparentTexels; p++) {
+      hasTransparentTexels = pixels[p * channels + channels - 1] < 250;
+    }
+  }
 
   const LoadedImage img = {
       .w = (uint32_t)w,
@@ -519,6 +548,7 @@ LoadedImage loadImage(const char* fileName, int channels) {
       .pixels = pixels,
       .debugName = debugName,
       .compressedFileName = convertFileName(fileName),
+      .hasTransparentTexels = hasTransparentTexels,
   };
 
   if (img.pixels && kEnableTextureCompression && (channels != 1) && !std::filesystem::exists(img.compressedFileName.c_str())) {
@@ -539,12 +569,12 @@ void loadMaterial(size_t i) {
     remainingMaterialsToLoad_.fetch_sub(1u, std::memory_order_release);
   };
 
-#define LOAD_TEX(result, tex, channels)                                                                          \
-  const LoadedImage result = std::string(cachedMaterials_[i].tex).empty()                                        \
-                                 ? LoadedImage()                                                                 \
-                                 : loadImage((texturesPathPrefix_ + cachedMaterials_[i].tex).c_str(), channels); \
-  if (loaderShouldExit_.load(std::memory_order_acquire)) {                                                       \
-    return;                                                                                                      \
+#define LOAD_TEX(result, tex, channels)                                                                                \
+  const LoadedImage result = std::string(cachedMaterials_[i].tex).empty()                                              \
+                                 ? LoadedImage()                                                                       \
+                                 : loadImage((texturesPathPrefix_ + cachedMaterials_[i].tex).c_str(), channels, true); \
+  if (loaderShouldExit_.load(std::memory_order_acquire)) {                                                             \
+    return;                                                                                                            \
   }
 
   LOAD_TEX(ambient, ambient_texname, 4);
@@ -553,9 +583,22 @@ void loadMaterial(size_t i) {
 
 #undef LOAD_TEX
 
-  const LoadedMaterial mtl{i, ambient, diffuse, alpha};
+  const LoadedImage specular =
+      materialSpecularNames_[i].empty() ? LoadedImage() : loadImage((texturesPathPrefix_ + materialSpecularNames_[i]).c_str(), 4, false);
+  if (loaderShouldExit_.load(std::memory_order_acquire)) {
+    return;
+  }
+  const LoadedImage normal = materialNormalNames_[i].empty() ? LoadedImage()
+                                                             : loadImage((texturesPathPrefix_ + materialNormalNames_[i]).c_str(), 4, false);
+  if (loaderShouldExit_.load(std::memory_order_acquire)) {
+    return;
+  }
 
-  if (!mtl.ambient.pixels && !mtl.diffuse.pixels) {
+  materialsAlphaTested_[i] = diffuse.hasTransparentTexels || alpha.hasTransparentTexels ? 1 : 0;
+
+  const LoadedMaterial mtl{i, ambient, diffuse, alpha, specular, normal};
+
+  if (!mtl.ambient.pixels && !mtl.diffuse.pixels && !mtl.specular.pixels && !mtl.normal.pixels) {
     materials_[i].texDiffuse = 0;
   } else {
     std::lock_guard guard(loadedMaterialsMutex_);
@@ -636,9 +679,66 @@ lvk::TextureHandle createTextureFromLoadedImage(const LoadedImage& img) {
   return handle;
 }
 
-void loadMaterialTextures(VulkanApp& app, const char* pathPrefix) {
+std::string trimMtlValue(const std::string& s) {
+  const size_t first = s.find_first_not_of(" \t\r");
+  if (first == std::string::npos) {
+    return std::string();
+  }
+  const size_t last = s.find_last_not_of(" \t\r");
+  return s.substr(first, last - first + 1);
+}
+
+void loadMaterialMapNames(VulkanApp& app, const char* mtlFileName) {
+  const std::vector<uint8_t> data = app.loadFile((app.folderContentRoot_ + mtlFileName).c_str());
+  std::unordered_map<std::string, std::pair<std::string, std::string>> maps;
+  std::string current;
+  size_t pos = 0;
+  while (pos < data.size()) {
+    size_t end = pos;
+    while (end < data.size() && data[end] != '\n') {
+      end++;
+    }
+    const std::string line = trimMtlValue(std::string((const char*)data.data() + pos, end - pos));
+    pos = end + 1;
+    const size_t space = line.find_first_of(" \t");
+    if (space == std::string::npos) {
+      continue;
+    }
+    const std::string key = line.substr(0, space);
+    std::string value = trimMtlValue(line.substr(space + 1));
+    while (!value.empty() && value[0] == '-') {
+      const size_t option = value.find_first_of(" \t");
+      const size_t argument = option == std::string::npos ? std::string::npos : value.find_first_not_of(" \t", option);
+      const size_t next = argument == std::string::npos ? std::string::npos : value.find_first_of(" \t", argument);
+      value = next == std::string::npos ? std::string() : trimMtlValue(value.substr(next));
+    }
+    if (key == "newmtl") {
+      current = value;
+    } else if (key == "map_Ks") {
+      maps[current].first = normalizeTextureName(value.c_str());
+    } else if (key == "map_bump" || key == "map_Bump" || key == "bump") {
+      maps[current].second = normalizeTextureName(value.c_str());
+    }
+  }
+  for (size_t i = 0; i != cachedMaterials_.size(); i++) {
+    const std::unordered_map<std::string, std::pair<std::string, std::string>>::const_iterator it = maps.find(cachedMaterials_[i].name);
+    if (it != maps.end()) {
+      materialSpecularNames_[i] = it->second.first;
+      materialNormalNames_[i] = it->second.second;
+    }
+  }
+}
+
+void loadMaterialTextures(VulkanApp& app, const char* pathPrefix, const char* mtlFileName = nullptr) {
   texturesApp_ = &app;
   texturesPathPrefix_ = app.folderContentRoot_ + pathPrefix;
+
+  materialMaps_.assign(cachedMaterials_.size(), GPUMaterialMaps{});
+  materialSpecularNames_.assign(cachedMaterials_.size(), std::string());
+  materialNormalNames_.assign(cachedMaterials_.size(), std::string());
+  if (mtlFileName) {
+    loadMaterialMapNames(app, mtlFileName);
+  }
 
   const uint32_t pixel = 0xFFFFFFFF;
   textureDummyWhite_ = app.ctx_->createTexture({
@@ -651,6 +751,7 @@ void loadMaterialTextures(VulkanApp& app, const char* pathPrefix) {
 
   materials_.clear();
   materials_.reserve(cachedMaterials_.size());
+  materialsAlphaTested_.assign(cachedMaterials_.size(), 0);
 
   for (const CachedMaterial& mtl : cachedMaterials_) {
     materials_.push_back(GPUMaterial{
@@ -673,7 +774,7 @@ void loadMaterialTextures(VulkanApp& app, const char* pathPrefix) {
   }
 }
 
-bool processLoadedMaterialTextures(lvk::ICommandBuffer& buffer, lvk::BufferHandle materialsBuffer) {
+bool processLoadedMaterialTextures(lvk::ICommandBuffer& buffer, lvk::BufferHandle materialsBuffer, lvk::BufferHandle mapsBuffer = {}) {
   LoadedMaterial mtl;
 
   {
@@ -695,6 +796,14 @@ bool processLoadedMaterialTextures(lvk::ICommandBuffer& buffer, lvk::BufferHandl
   materials_[mtl.idx].texAlpha = alpha.index();
 
   buffer.cmdUpdateBuffer(materialsBuffer, 0, sizeof(GPUMaterial) * materials_.size(), materials_.data());
+
+  if (mapsBuffer) {
+    materialMaps_[mtl.idx] = {
+        .texSpecular = createTextureFromLoadedImage(mtl.specular).index(),
+        .texNormal = createTextureFromLoadedImage(mtl.normal).index(),
+    };
+    buffer.cmdUpdateBuffer(mapsBuffer, 0, sizeof(GPUMaterialMaps) * materialMaps_.size(), materialMaps_.data());
+  }
 
   return true;
 }
