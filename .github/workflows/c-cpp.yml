@@ -50,9 +50,9 @@ jobs:
             cmake --version
 
 #      - name: Prepare Vulkan SDK
-#        uses: jakoch/install-vulkan-sdk-action@v1.5.5
+#        uses: jakoch/install-vulkan-sdk-action@v1.7.0
 #        with:
-#            vulkan_version: 1.4.350.0
+#            vulkan_version: 1.4.363.0
 #            install_runtime: true
 #            cache: true
 #            stripdown: true
@@ -168,9 +168,9 @@ jobs:
             sudo apt-get install -y cmake gcc-15 clang-21 xorg-dev libxinerama-dev libxcursor-dev libgles2-mesa-dev libegl1-mesa-dev libglfw3-dev libglew-dev libstdc++-15-dev extra-cmake-modules libxkbcommon-x11-dev wayland-protocols
 
         - name: Prepare Vulkan SDK
-          uses: jakoch/install-vulkan-sdk-action@v1.5.5
+          uses: jakoch/install-vulkan-sdk-action@v1.7.0
           with:
-            vulkan_version: 1.4.350.0
+            vulkan_version: 1.4.363.0
             install_runtime: true
             cache: true
             stripdown: true
@@ -217,9 +217,9 @@ jobs:
             key: deps-${{ runner.os }}-${{ hashFiles('third-party/bootstrap-deps.json') }}
 
         - name: Install Vulkan SDK
-          uses: jakoch/install-vulkan-sdk-action@v1.5.5
+          uses: jakoch/install-vulkan-sdk-action@v1.7.0
           with:
-            vulkan_version: 1.4.350.0
+            vulkan_version: 1.4.363.0
             install_runtime: true
             cache: true
             stripdown: true
@@ -275,9 +275,9 @@ jobs:
             vulkaninfo
 
         - name: Install Vulkan SDK
-          uses: jakoch/install-vulkan-sdk-action@v1.5.5
+          uses: jakoch/install-vulkan-sdk-action@v1.7.0
           with:
-            vulkan_version: 1.4.350.0
+            vulkan_version: 1.4.363.0
             install_runtime: true
             cache: false
             stripdown: true
