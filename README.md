@@ -63,8 +63,8 @@ On MacOS, `KosmicKrisp` and `VulkanSDK 1.4.363+` are required.
 Before building, run the deployment scripts:
 
 ```
-python3 deploy_content.py
 python3 deploy_deps.py
+python3 deploy_content.py
 ```
 
 These scripts download external third-party dependencies. Please check [LICENSE.md](./LICENSE.md) for the full list.
