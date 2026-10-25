@@ -7902,7 +7902,7 @@ lvk::Result lvk::VulkanContext::createInstance() {
       .flags = hasPortabilityEnumeration ? VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR : 0u,
       .pApplicationInfo = &appInfo,
       .enabledLayerCount = (uint32_t)enabledLayers.size(),
-      .ppEnabledLayerNames = enabledLayers.data(),
+      .ppEnabledLayerNames = enabledLayers.empty() ? nullptr : enabledLayers.data(),
       .enabledExtensionCount = (uint32_t)enabledInstanceExtensionNames_.size(),
       .ppEnabledExtensionNames = enabledInstanceExtensionNames_.data(),
   };
