@@ -302,6 +302,8 @@ VkShaderStageFlagBits shaderStageToVkShaderStage(lvk::ShaderStage stage) {
     return VK_SHADER_STAGE_INTERSECTION_BIT_KHR;
   case lvk::Stage_Callable:
     return VK_SHADER_STAGE_CALLABLE_BIT_KHR;
+  case lvk::Stage_DataGraph:
+    break; // VK_ARM_data_graph has no shader stage bit
   };
   LVK_ASSERT(false);
   return VK_SHADER_STAGE_FLAG_BITS_MAX_ENUM;
