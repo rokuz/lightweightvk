@@ -31,7 +31,6 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/random.hpp>
 
-#include <fast_obj.h>
 #include <meshoptimizer.h>
 #include <shared/UtilsCubemap.h>
 #include <stb/stb_image.h>
