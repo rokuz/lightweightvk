@@ -121,6 +121,7 @@ using BufferHandle = ldr::Handle<struct Buffer>;
 using TextureHandle = ldr::Handle<struct Texture>;
 using QueryPoolHandle = ldr::Handle<struct QueryPool>;
 using AccelStructHandle = ldr::Handle<struct AccelerationStructure>;
+using TensorHandle = ldr::Handle<struct Tensor>;
 
 // forward declarations to access incomplete type IContext
 void destroy(lvk::IContext* ctx, lvk::ComputePipelineHandle handle);
@@ -132,6 +133,7 @@ void destroy(lvk::IContext* ctx, lvk::BufferHandle handle);
 void destroy(lvk::IContext* ctx, lvk::TextureHandle handle);
 void destroy(lvk::IContext* ctx, lvk::QueryPoolHandle handle);
 void destroy(lvk::IContext* ctx, lvk::AccelStructHandle handle);
+void destroy(lvk::IContext* ctx, lvk::TensorHandle handle);
 
 template<typename HandleType>
 class Holder final {
@@ -1177,6 +1179,8 @@ struct AccelStructDesc {
   const char* debugName = "";
 };
 
+enum { LVK_TENSOR_MAX_RANK = 6 };
+
 enum TensorUsageBits : uint8_t {
   TensorUsageBits_TransferSrc = 1 << 0,
   TensorUsageBits_TransferDst = 1 << 1,
@@ -1191,6 +1195,18 @@ enum TensorTiling : uint8_t {
   TensorTiling_Linear,
 };
 
+struct TensorDesc {
+  Format format = Format_Invalid;
+  uint32_t rank = 0;
+  int64_t dimensions[LVK_TENSOR_MAX_RANK] = {};
+  int64_t strides[LVK_TENSOR_MAX_RANK] = {};
+  TensorTiling tiling = TensorTiling_Optimal;
+  TensorUsageFlags usage = TensorUsageBits_DataGraph;
+  StorageType storage = StorageType_Device;
+  const void* data = nullptr;
+  const char* debugName = "";
+};
+
 struct TensorProperties {
   uint32_t maxTensorDimensionCount = 0;
   uint64_t maxTensorElements = 0;
@@ -1199,6 +1215,9 @@ struct TensorProperties {
   uint64_t maxTensorSize = 0;
   bool tensorNonPacked = false;
 };
+
+[[nodiscard]] uint64_t getTensorNumElements(const TensorDesc& desc);
+[[nodiscard]] uint64_t getTensorDataSize(const TensorDesc& desc);
 
 struct SubmitHandle {
   union {
@@ -1223,6 +1242,7 @@ struct Dependencies {
   ldr::Span<TextureHandle> storageImages = {};
   ldr::Span<BufferHandle> buffers = {};
   ldr::Span<TextureHandle> inputAttachments = {};
+  ldr::Span<TensorHandle> tensors = {};
   // Cross-queue waits only: dependencies on work submitted to the *other* queue. Same-queue ordering is already
   // guaranteed automatically (by barriers within a command buffer and by the intra-queue chain between submits).
   ldr::Span<SubmitHandle> waitCompute = {}; // async-compute work a graphics submit must wait for
@@ -1347,6 +1367,8 @@ class ICommandBuffer {
   virtual void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) = 0;
   virtual void cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) = 0;
 
+  virtual void cmdCopyTensor(TensorHandle src, TensorHandle dst) = 0;
+
 #if defined(LVK_WITH_RAW_VULKAN)
   virtual operator VkCommandBuffer() const = 0;
 #endif // defined(LVK_WITH_RAW_VULKAN)
@@ -1392,6 +1414,10 @@ class IContext {
 
   [[nodiscard]] virtual Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult = nullptr) = 0;
 
+  [[nodiscard]] virtual Holder<TensorHandle> createTensor(const TensorDesc& desc,
+                                                          const char* debugName = nullptr,
+                                                          Result* outResult = nullptr) = 0;
+
   virtual void destroy(ComputePipelineHandle handle) = 0;
   virtual void destroy(RenderPipelineHandle handle) = 0;
   virtual void destroy(RayTracingPipelineHandle) = 0;
@@ -1401,6 +1427,7 @@ class IContext {
   virtual void destroy(TextureHandle handle) = 0;
   virtual void destroy(QueryPoolHandle handle) = 0;
   virtual void destroy(AccelStructHandle handle) = 0;
+  virtual void destroy(TensorHandle handle) = 0;
   virtual void destroy(Framebuffer& fb) = 0;
 
   [[nodiscard]] virtual uint64_t gpuAddress(AccelStructHandle handle) const = 0;
@@ -1417,6 +1444,13 @@ class IContext {
   virtual void flushMappedMemory(BufferHandle handle, size_t offset, size_t size) const = 0;
   virtual void invalidateMappedMemory(BufferHandle handle, size_t offset, size_t size) const = 0;
   [[nodiscard]] virtual uint32_t getMaxStorageBufferRange() const = 0;
+#pragma endregion
+
+#pragma region Tensor functions (VK_ARM_tensors)
+  virtual Result upload(TensorHandle handle, const void* data, size_t size, size_t offset = 0) = 0;
+  virtual Result download(TensorHandle handle, void* data, size_t size, size_t offset = 0) = 0;
+  [[nodiscard]] virtual uint8_t* getMappedPtr(TensorHandle handle) const = 0;
+  [[nodiscard]] virtual TensorDesc getTensorDesc(TensorHandle handle) const = 0;
 #pragma endregion
 
 #pragma region Texture functions

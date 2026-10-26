@@ -90,7 +90,8 @@ VkResult allocateMemory2(VkPhysicalDevice physDev,
                          const VkMemoryRequirements2* memRequirements,
                          VkMemoryPropertyFlags props,
                          VkDeviceMemory* outMemory,
-                         VkMemoryPropertyFlags* outMemoryProperties = nullptr);
+                         VkMemoryPropertyFlags* outMemoryProperties = nullptr,
+                         const void* pNext = nullptr);
 
 glslang_resource_t getGlslangResource(const VkPhysicalDeviceLimits& limits,
                                       const VkPhysicalDeviceMeshShaderPropertiesEXT* meshShader = nullptr);

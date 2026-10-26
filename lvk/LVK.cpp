@@ -292,6 +292,26 @@ void lvk::destroy(lvk::IContext* ctx, lvk::AccelStructHandle handle) {
   }
 }
 
+void lvk::destroy(lvk::IContext* ctx, lvk::TensorHandle handle) {
+  if (ctx) {
+    ctx->destroy(handle);
+  }
+}
+
+uint64_t lvk::getTensorNumElements(const TensorDesc& desc) {
+  LVK_ASSERT(desc.rank > 0 && desc.rank <= LVK_TENSOR_MAX_RANK);
+
+  uint64_t numElements = 1;
+  for (uint32_t i = 0; i != desc.rank; i++) {
+    numElements *= (uint64_t)desc.dimensions[i];
+  }
+  return numElements;
+}
+
+uint64_t lvk::getTensorDataSize(const TensorDesc& desc) {
+  return getTensorNumElements(desc) * properties[desc.format].bytesPerBlock;
+}
+
 // Logs GLSL shaders with line numbers annotation
 void lvk::logShaderSource(const char* text) {
   uint32_t line = 0;

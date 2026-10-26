@@ -406,6 +406,30 @@ struct AccelerationStructure {
   VkAccelerationStructureTrianglesOpacityMicromapKHR opacityMicromap = {};
 };
 
+struct VulkanTensor final {
+  // clang-format off
+  [[nodiscard]] inline bool isMapped() const { return mappedPtr_ != nullptr; }
+  [[nodiscard]] inline bool isLinear() const { return vkTiling_ == VK_TENSOR_TILING_LINEAR_ARM; }
+  // clang-format on
+
+  VkTensorARM vkTensor_ = VK_NULL_HANDLE;
+  VkTensorViewARM vkTensorView_ = VK_NULL_HANDLE;
+  VkDeviceMemory vkMemory_ = VK_NULL_HANDLE;
+  VkDeviceSize vkMemoryOffset_ = 0;
+  VmaAllocation vmaAllocation_ = VK_NULL_HANDLE;
+  VkFormat vkFormat_ = VK_FORMAT_UNDEFINED;
+  VkTensorTilingARM vkTiling_ = VK_TENSOR_TILING_OPTIMAL_ARM;
+  VkTensorUsageFlagsARM vkUsageFlags_ = 0;
+  VkMemoryPropertyFlags vkMemFlags_ = 0;
+  uint32_t rank_ = 0;
+  int64_t dimensions_[LVK_TENSOR_MAX_RANK] = {};
+  int64_t strides_[LVK_TENSOR_MAX_RANK] = {};
+  uint64_t dataSize_ = 0;
+  uint32_t elementSize_ = 0;
+  void* mappedPtr_ = nullptr;
+  bool isCoherentMemory_ = false;
+};
+
 class CommandBuffer final : public ICommandBuffer {
  public:
   CommandBuffer() = default;
@@ -495,6 +519,7 @@ class CommandBuffer final : public ICommandBuffer {
   void cmdGenerateMipmap(TextureHandle handle) override;
   void cmdUpdateTLAS(AccelStructHandle handle, BufferHandle instancesBuffer) override;
   void cmdUpdateBLAS(const ldr::Span<AccelStructHandle>& handles) override;
+  void cmdCopyTensor(TensorHandle src, TensorHandle dst) override;
 
   operator VkCommandBuffer() const
 #if defined(LVK_WITH_RAW_VULKAN)
@@ -518,6 +543,7 @@ class CommandBuffer final : public ICommandBuffer {
                      VkPipelineStageFlags2 dstStage,
                      VkDeviceSize offset = 0,
                      VkDeviceSize size = VK_WHOLE_SIZE);
+  void tensorBarriers(const ldr::Span<TensorHandle>& tensors, VkPipelineStageFlags2 srcStage, VkPipelineStageFlags2 dstStage);
 
   void addCrossQueueDependencies(const Dependencies& deps);
   // Completes a cross-queue ownership transfer for `img` if the producing queue armed one; returns true if an acquire was emitted
@@ -634,6 +660,7 @@ class VulkanContext final : public IContext {
   Holder<QueryPoolHandle> createQueryPool(uint32_t numQueries, const char* debugName, Result* outResult) override;
 
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult) override;
+  Holder<TensorHandle> createTensor(const TensorDesc& desc, const char* debugName, Result* outResult) override;
 
   void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
@@ -644,6 +671,7 @@ class VulkanContext final : public IContext {
   void destroy(TextureHandle handle) override;
   void destroy(QueryPoolHandle handle) override;
   void destroy(AccelStructHandle handle) override;
+  void destroy(TensorHandle handle) override;
   void destroy(Framebuffer& fb) override;
 
   uint64_t gpuAddress(AccelStructHandle handle) const override;
@@ -657,6 +685,10 @@ class VulkanContext final : public IContext {
 
   Result upload(TextureHandle handle, const TextureRangeDesc& range, const void* data, uint32_t bufferRowLength = 0) override;
   Result download(TextureHandle handle, const TextureRangeDesc& range, void* outData) override;
+  Result upload(TensorHandle handle, const void* data, size_t size, size_t offset) override;
+  Result download(TensorHandle handle, void* data, size_t size, size_t offset) override;
+  uint8_t* getMappedPtr(TensorHandle handle) const override;
+  TensorDesc getTensorDesc(TensorHandle handle) const override;
   Dimensions getDimensions(TextureHandle handle) const override;
   float getAspectRatio(TextureHandle handle) const override;
   Format getFormat(TextureHandle handle) const override;
@@ -846,6 +878,10 @@ class VulkanContext final : public IContext {
                                    std::vector<VkMicromapUsageKHR>& outUsageCounts,
                                    VkAccelerationStructureBuildSizesInfoKHR& outSizesInfo) const;
   void createDummyTLAS();
+  TensorHandle createTensor(const VkTensorDescriptionARM& description,
+                            VkMemoryPropertyFlags memFlags,
+                            const char* debugName,
+                            Result* outResult);
 
  private:
   friend class lvk::VulkanSwapchain;
@@ -982,6 +1018,7 @@ class VulkanContext final : public IContext {
   bool has_EXT_dynamic_rendering_unused_attachments_ = false;
   bool has_ARM_tensors_ = false;
   bool has_ARM_data_graph_ = false;
+  bool hasMLEmulationLayer_ = false;
   // VK_EXT_host_image_copy
   bool hostImageCopyToShaderReadOnly_ = false; // SHADER_READ_ONLY_OPTIMAL is a usable copy destination
   bool hostImageCopyToGeneral_ = false; // GENERAL is a usable copy destination (for images which cannot be sampled)
@@ -1005,6 +1042,7 @@ class VulkanContext final : public IContext {
   ldr::Pool<lvk::Texture, lvk::VulkanImage> texturesPool_;
   ldr::Pool<lvk::QueryPool, VkQueryPool> queriesPool_;
   ldr::Pool<lvk::AccelerationStructure, lvk::AccelerationStructure> accelStructuresPool_;
+  ldr::Pool<lvk::Tensor, lvk::VulkanTensor> tensorsPool_;
 };
 
 } // namespace lvk
