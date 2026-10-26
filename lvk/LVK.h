@@ -1177,6 +1177,29 @@ struct AccelStructDesc {
   const char* debugName = "";
 };
 
+enum TensorUsageBits : uint8_t {
+  TensorUsageBits_TransferSrc = 1 << 0,
+  TensorUsageBits_TransferDst = 1 << 1,
+  TensorUsageBits_ImageAliasing = 1 << 2,
+  TensorUsageBits_DataGraph = 1 << 3,
+};
+
+using TensorUsageFlags = uint8_t;
+
+enum TensorTiling : uint8_t {
+  TensorTiling_Optimal = 0,
+  TensorTiling_Linear,
+};
+
+struct TensorProperties {
+  uint32_t maxTensorDimensionCount = 0;
+  uint64_t maxTensorElements = 0;
+  uint64_t maxPerDimensionTensorElements = 0;
+  int64_t maxTensorStride = 0;
+  uint64_t maxTensorSize = 0;
+  bool tensorNonPacked = false;
+};
+
 struct SubmitHandle {
   union {
     struct {
@@ -1440,6 +1463,8 @@ class IContext {
   virtual bool supportsTextureFormat(Format format, TextureUsageFlags usageFlags = TextureUsageBits_Sampled) const = 0;
   virtual bool supportsTensorsARM() const = 0;
   virtual bool supportsDataGraphARM() const = 0;
+  [[nodiscard]] virtual TensorProperties getTensorProperties() const = 0;
+  [[nodiscard]] virtual TensorUsageFlags getTensorFormatSupport(Format format, TensorTiling tiling) const = 0;
 
   // the maximum number of views in a multiview render pass, i.e. 1 unless multiview is supported
   [[nodiscard]] virtual uint32_t getMultiviewMaxViewCount() const = 0;

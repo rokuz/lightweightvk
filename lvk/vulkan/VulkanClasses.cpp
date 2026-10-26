@@ -8619,10 +8619,6 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
   VkPhysicalDeviceTensorFeaturesARM tensorFeatures = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TENSOR_FEATURES_ARM,
       .tensorNonPacked = vkTensorFeatures_.tensorNonPacked,
-      .shaderTensorAccess = VK_TRUE,
-      .shaderStorageTensorArrayDynamicIndexing = VK_TRUE,
-      .shaderStorageTensorArrayNonUniformIndexing = vkTensorFeatures_.shaderStorageTensorArrayNonUniformIndexing,
-      .descriptorBindingStorageTensorUpdateAfterBind = VK_TRUE,
       .tensors = VK_TRUE,
   };
   VkPhysicalDeviceDataGraphFeaturesARM dataGraphFeatures = {
@@ -8790,11 +8786,8 @@ lvk::Result lvk::VulkanContext::initContext(const HWDeviceDesc& desc) {
     addOptionalExtension(VK_KHR_OPACITY_MICROMAP_EXTENSION_NAME, has_KHR_opacity_micromap_, &opacityMicromapFeatures);
   }
   // only ask for the feature bits the device reports, otherwise vkCreateDevice() fails
-  if (vkTensorFeatures_.tensors && vkTensorFeatures_.shaderTensorAccess && vkTensorFeatures_.shaderStorageTensorArrayDynamicIndexing &&
-      vkTensorFeatures_.descriptorBindingStorageTensorUpdateAfterBind && vkTensorProperties_.shaderTensorSupportedStages) {
+  if (vkTensorFeatures_.tensors) {
     addOptionalExtension(VK_ARM_TENSORS_EXTENSION_NAME, has_ARM_tensors_, &tensorFeatures);
-  } else if (hasExtension(VK_ARM_TENSORS_EXTENSION_NAME, allDeviceExtensions)) {
-    LLOGW("VK_ARM_tensors is present but lacks the features required for bindless tensors (update-after-bind, dynamic indexing)\n");
   }
   // data graphs are dispatched on the graphics queue, so its queue family has to support them
   auto hasDataGraphQueue = [this]() -> bool {
@@ -10165,4 +10158,43 @@ bool lvk::VulkanContext::supportsTextureFormat(Format format, TextureUsageFlags 
   vkGetPhysicalDeviceFormatProperties2(getVkPhysicalDevice(), vkFormat, &props);
 
   return (props.formatProperties.optimalTilingFeatures & requiredFeatures) == requiredFeatures;
+}
+
+lvk::TensorProperties lvk::VulkanContext::getTensorProperties() const {
+  if (!has_ARM_tensors_) {
+    return {};
+  }
+  return {
+      .maxTensorDimensionCount = vkTensorProperties_.maxTensorDimensionCount,
+      .maxTensorElements = vkTensorProperties_.maxTensorElements,
+      .maxPerDimensionTensorElements = vkTensorProperties_.maxPerDimensionTensorElements,
+      .maxTensorStride = vkTensorProperties_.maxTensorStride,
+      .maxTensorSize = vkTensorProperties_.maxTensorSize,
+      .tensorNonPacked = vkTensorFeatures_.tensorNonPacked == VK_TRUE,
+  };
+}
+
+lvk::TensorUsageFlags lvk::VulkanContext::getTensorFormatSupport(Format format, TensorTiling tiling) const {
+  if (!has_ARM_tensors_ || format == Format_Invalid) {
+    return 0;
+  }
+  VkTensorFormatPropertiesARM tensorProps = {.sType = VK_STRUCTURE_TYPE_TENSOR_FORMAT_PROPERTIES_ARM};
+  VkFormatProperties2 props = {.sType = VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2, .pNext = &tensorProps};
+  vkGetPhysicalDeviceFormatProperties2(vkPhysicalDevice_, formatToVkFormat(format), &props);
+  const VkFormatFeatureFlags2 features = tiling == TensorTiling_Linear ? tensorProps.linearTilingTensorFeatures
+                                                                       : tensorProps.optimalTilingTensorFeatures;
+  TensorUsageFlags usage = 0;
+  if (features & VK_FORMAT_FEATURE_2_TRANSFER_SRC_BIT) {
+    usage |= TensorUsageBits_TransferSrc;
+  }
+  if (features & VK_FORMAT_FEATURE_2_TRANSFER_DST_BIT) {
+    usage |= TensorUsageBits_TransferDst;
+  }
+  if (features & VK_FORMAT_FEATURE_2_TENSOR_IMAGE_ALIASING_BIT_ARM) {
+    usage |= TensorUsageBits_ImageAliasing;
+  }
+  if (has_ARM_data_graph_ && (features & VK_FORMAT_FEATURE_2_TENSOR_DATA_GRAPH_BIT_ARM)) {
+    usage |= TensorUsageBits_DataGraph;
+  }
+  return usage;
 }

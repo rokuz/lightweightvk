@@ -716,6 +716,8 @@ class VulkanContext final : public IContext {
                : 1u;
   }
   [[nodiscard]] size_t getPipelineCacheData(void* outData, size_t dataSize) const override;
+  [[nodiscard]] TensorProperties getTensorProperties() const override;
+  [[nodiscard]] TensorUsageFlags getTensorFormatSupport(Format format, TensorTiling tiling) const override;
 
   double getTimestampPeriodToMs() const override;
   bool getQueryPoolResults(QueryPoolHandle pool, uint32_t firstQuery, uint32_t queryCount, size_t dataSize, void* outData, size_t stride)
