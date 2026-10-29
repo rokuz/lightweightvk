@@ -283,10 +283,10 @@ double glfwGetTime() {
 #endif // ANDROID
 
 #if defined(ANDROID)
-VulkanApp::VulkanApp(android_app* androidApp, const VulkanAppConfig& cfg) : androidApp_(androidApp), cfg_(cfg) {
-  const char* logFileName = nullptr;
+VulkanApp::VulkanApp(android_app* androidApp, int argc, char* argv[], const VulkanAppConfig& cfg) : androidApp_(androidApp), cfg_(cfg) {
 #else
 VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(cfg) {
+#endif // ANDROID
   const char* logFileName = nullptr;
   for (int i = 1; i < argc; i++) {
     if (!strcmp(argv[i], "--headless")) {
@@ -323,7 +323,6 @@ VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(
       }
     }
   }
-#endif // ANDROID
 #if defined(LVK_WITH_MINILOG)
   minilog::initialize(logFileName,
                       {

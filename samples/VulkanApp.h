@@ -49,8 +49,15 @@ double glfwGetTime();
 
 // clang-format off
 #if defined(ANDROID)
-#  define VULKAN_APP_MAIN void android_main(android_app* androidApp)
-#  define VULKAN_APP_DECLARE(app, config) VulkanApp app(androidApp, config)
+// Android has no command line: android_main() owns argv and passes it to the sample's main function
+#  define VULKAN_APP_MAIN                                                    \
+     void vulkanAppMain(android_app* androidApp, int argc, char* argv[]);    \
+     void android_main(android_app* androidApp) {                            \
+       char* argv[] = {nullptr};                                             \
+       vulkanAppMain(androidApp, 0, argv);                                   \
+     }                                                                       \
+     void vulkanAppMain(android_app* androidApp, int argc, char* argv[])
+#  define VULKAN_APP_DECLARE(app, config) VulkanApp app(androidApp, argc, argv, config)
 #  define VULKAN_APP_EXIT() return
 #else
 #  define VULKAN_APP_MAIN int main(int argc, char* argv[])
@@ -109,7 +116,7 @@ struct VulkanAppConfig {
 class VulkanApp {
  public:
 #if defined(ANDROID)
-  explicit VulkanApp(android_app* androidApp, const VulkanAppConfig& cfg = {});
+  explicit VulkanApp(android_app* androidApp, int argc, char* argv[], const VulkanAppConfig& cfg = {});
 #else
   explicit VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg = {});
 #endif // ANDROID
