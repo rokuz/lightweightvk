@@ -10658,7 +10658,11 @@ lvk::Result lvk::VulkanContext::upload(lvk::TensorHandle handle, const void* dat
   if (!result.isOk()) {
     return result;
   }
-  upload(staging, data, size, 0);
+  const Result stagingUpload = upload(staging, data, size, 0);
+  if (!stagingUpload.isOk()) {
+    destroy(staging);
+    return stagingUpload;
+  }
 
   {
     lvk::CommandBuffer cmd(this, *immediate_, deviceQueues_.graphicsQueueFamilyIndex);
