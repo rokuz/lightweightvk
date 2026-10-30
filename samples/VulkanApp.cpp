@@ -331,6 +331,22 @@ VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(
                       });
 #endif
 
+#if defined(LVK_ML_EMULATION_LAYER_PATH)
+  // let the Vulkan loader find the Arm ML Emulation Layer built by CMake (samples enable it via `ContextConfig::layers`)
+  {
+    const char* existingPaths = std::getenv("VK_ADD_LAYER_PATH");
+#if defined(_WIN32)
+    const std::string paths = existingPaths && *existingPaths ? std::string(LVK_ML_EMULATION_LAYER_PATH ";") + existingPaths
+                                                              : std::string(LVK_ML_EMULATION_LAYER_PATH);
+    _putenv_s("VK_ADD_LAYER_PATH", paths.c_str());
+#else
+    const std::string paths = existingPaths && *existingPaths ? std::string(LVK_ML_EMULATION_LAYER_PATH ":") + existingPaths
+                                                              : std::string(LVK_ML_EMULATION_LAYER_PATH);
+    setenv("VK_ADD_LAYER_PATH", paths.c_str(), 1);
+#endif // _WIN32
+  }
+#endif // LVK_ML_EMULATION_LAYER_PATH
+
   // we use minilog
   fpsCounter_.printFPS_ = false;
 

@@ -7725,12 +7725,26 @@ lvk::AccelStructSizes lvk::VulkanContext::getAccelStructSizes(const AccelStructD
 lvk::Result lvk::VulkanContext::createInstance() {
   vkInstance_ = VK_NULL_HANDLE;
 
-  // check if we have validation layers in the system
+  // check if we have validation layers and the requested custom layers in the system
   {
     uint32_t numLayerProperties = 0;
     vkEnumerateInstanceLayerProperties(&numLayerProperties, nullptr);
     std::vector<VkLayerProperties> layerProperties(numLayerProperties);
     vkEnumerateInstanceLayerProperties(&numLayerProperties, layerProperties.data());
+
+    for (const char*& layer : config_.layers) {
+      if (!layer) {
+        continue;
+      }
+      bool isAvailable = false;
+      for (const VkLayerProperties& props : layerProperties) {
+        isAvailable = isAvailable || !strcmp(props.layerName, layer);
+      }
+      if (!isAvailable) {
+        LLOGW("Layer `%s` is not available\n", layer);
+        layer = nullptr;
+      }
+    }
 
     [this, &layerProperties]() -> void {
       for (const VkLayerProperties& props : layerProperties) {
