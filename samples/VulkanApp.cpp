@@ -338,12 +338,25 @@ VulkanApp::VulkanApp(int argc, char* argv[], const VulkanAppConfig& cfg) : cfg_(
   {
     using namespace std::filesystem;
 #if defined(ANDROID)
-    if (const char* externalStorage = std::getenv("EXTERNAL_STORAGE")) {
-      folderThirdParty_ = (path(externalStorage) / "LVK" / "deps" / "src").string() + "/";
-      folderContentRoot_ = (path(externalStorage) / "LVK" / "content").string() + "/";
-      tarBasePath_ = (path(externalStorage) / "LVK").string() + "/";
-      const std::string tarPath = (path(externalStorage) / "LVK" / "lvk_content.tar").string();
-      tarReader_ = std::make_unique<TarFileReader>(tarPath.c_str());
+    // the content archive is this app's OBB (`main.<versionCode>.<package>.obb`, see `deploy_content_android.py --obb`)
+    // or the shared `$EXTERNAL_STORAGE/LVK/lvk_content.tar`
+    path root;
+    path archive;
+    if (const char* obbPath = androidApp_->activity->obbPath) {
+      root = obbPath;
+      archive = root / ("main.1." + root.filename().string() + ".obb");
+    }
+    std::error_code ec;
+    if (!exists(archive, ec)) {
+      const char* externalStorage = std::getenv("EXTERNAL_STORAGE");
+      root = externalStorage ? path(externalStorage) / "LVK" : path();
+      archive = root / "lvk_content.tar";
+    }
+    if (!root.empty()) {
+      folderThirdParty_ = (root / "deps" / "src").string() + "/";
+      folderContentRoot_ = (root / "content").string() + "/";
+      tarBasePath_ = root.string() + "/";
+      tarReader_ = std::make_unique<TarFileReader>(archive.string().c_str());
     }
 #else
     path subdir(cfg_.contentSubdir);

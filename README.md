@@ -119,6 +119,12 @@ Before running demo apps on your device, connect the device to a desktop machine
 python3 deploy_content_android.py
 ```
 
+All demo apps share this content. Alternatively, it can be pushed as an OBB of selected demo apps, which then use their own copy:
+
+```
+python3 deploy_content_android.py --obb org.lvk.samples.lvk_001_HelloTriangle
+```
+
 > NOTE: To run demos on an Android device, it should support Vulkan 1.3. Please check https://vulkan.gpuinfo.org/listdevices.php?platform=android
 
 > NOTE: At the moment, demo apps do not support touch input on Android.

@@ -6,9 +6,15 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+import argparse
 import os
 import subprocess
 import tarfile
+
+parser = argparse.ArgumentParser(description="Packs the sample content and pushes it to an Android device")
+parser.add_argument("--obb", nargs="+", metavar="PACKAGE",
+                    help="push as the OBB of these packages (e.g. org.lvk.samples.lvk_001_HelloTriangle) instead of $EXTERNAL_STORAGE/LVK")
+args = parser.parse_args()
 
 tar_path = os.path.join("third-party", "content", "archives", "lvk_content.tar")
 
@@ -65,9 +71,14 @@ except Exception as e:
     external_storage = None
 
 if external_storage:
-    android_tar_path = external_storage + "/LVK/lvk_content.tar"
-    print("Uploading to {} ...".format(android_tar_path))
-    subprocess.run(["adb", "push", tar_path, android_tar_path])
+    # the samples look for `main.<versionCode>.<package>.obb`, and `versionCode` is 1 in `android/app/build.gradle.in`
+    if args.obb:
+        android_tar_paths = ["{}/Android/obb/{}/main.1.{}.obb".format(external_storage, p, p) for p in args.obb]
+    else:
+        android_tar_paths = [external_storage + "/LVK/lvk_content.tar"]
+    for android_tar_path in android_tar_paths:
+        print("Uploading to {} ...".format(android_tar_path))
+        subprocess.run(["adb", "push", tar_path, android_tar_path])
     print("Completed")
 else:
     print("External storage path is not found")

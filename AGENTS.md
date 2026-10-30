@@ -56,7 +56,7 @@ cd android/001_HelloTriangle  # or any other sample
 ./gradlew assembleDebug
 ```
 
-For Android devices: `python3 deploy_content_android.py`
+For Android devices: `python3 deploy_content_android.py` (or `--obb <package>...` to push the content as the OBB of each given sample instead of the shared `$EXTERNAL_STORAGE/LVK`)
 
 ### Building
 ```bash
