@@ -5264,6 +5264,14 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
     // For now, always set this flag so we can read it back
     usageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
   }
+  const bool isTensorAliasing = (desc.usage & lvk::TextureUsageBits_TensorAliasing) != 0;
+  if (isTensorAliasing) {
+    if (!LVK_VERIFY(has_ARM_tensors_)) {
+      Result::setResult(outResult, Result::Code::RuntimeError, "VK_ARM_tensors is not supported (see supportsTensorsARM())");
+      return {};
+    }
+    usageFlags |= VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM;
+  }
 
   LVK_ASSERT_MSG(usageFlags != 0, "Invalid usage flags");
 
@@ -5340,7 +5348,7 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
   LVK_ASSERT(vkExtent.depth > 0);
 
   // add VK_IMAGE_USAGE_HOST_TRANSFER_BIT to eligible single-plane images to enable the staging-free imageData2D() path
-  if (desc.storage != lvk::StorageType_Memoryless && lvk::getNumImagePlanes(desc.format) == 1) {
+  if (desc.storage != lvk::StorageType_Memoryless && lvk::getNumImagePlanes(desc.format) == 1 && !isTensorAliasing) {
     const VkImageCreateInfo hostCopyProbe = {
         .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
         .flags = vkCreateFlags,
@@ -5425,8 +5433,10 @@ lvk::Holder<lvk::TextureHandle> lvk::VulkanContext::createTexture(const TextureD
     const bool isDeviceOnly = (memFlags & VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) && !(memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
     // VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE requires the host-access flag to land in host-visible memory so vmaMapMemory() below works
     const VmaAllocationCreateInfo vmaAllocInfo = {
-        .flags = memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
-                                                                : VmaAllocationCreateFlags{0},
+        // aliasing memory must not be a dedicated allocation, which VMA could otherwise make for large images
+        .flags =
+            (memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT ? VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT : VmaAllocationCreateFlags{0}) |
+            (isTensorAliasing ? VMA_ALLOCATION_CREATE_CAN_ALIAS_BIT : VmaAllocationCreateFlags{0}),
         .usage = VMA_MEMORY_USAGE_AUTO_PREFER_DEVICE,
         .requiredFlags = isDeviceOnly ? VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT) : VkMemoryPropertyFlags{0},
     };
@@ -6850,6 +6860,11 @@ void lvk::VulkanContext::destroy(BufferHandle handle) {
     return;
   }
 
+  for (const lvk::VulkanTensor& tensor : tensorsPool_.objects_) {
+    LVK_ASSERT_MSG(!tensor.vkTensor_ || tensor.aliasBuffer_ != handle,
+                   "A tensor aliasing this buffer is bound to its memory and has to be destroyed first");
+  }
+
   if (LVK_VULKAN_USE_VMA) {
     if (buf->mappedPtr_) {
       vmaUnmapMemory((VmaAllocator)getVmaAllocator(), buf->vmaAllocation_);
@@ -6914,6 +6929,11 @@ void lvk::VulkanContext::destroy(lvk::TextureHandle handle) {
       deferredTask(
           std::packaged_task<void()>([device = getVkDevice(), imageView = v]() { vkDestroyImageView(device, imageView, nullptr); }));
     }
+  }
+
+  for (const lvk::VulkanTensor& tensor : tensorsPool_.objects_) {
+    LVK_ASSERT_MSG(!tensor.vkTensor_ || tensor.aliasTexture_ != handle,
+                   "A tensor aliasing this texture is bound to its memory and has to be destroyed first");
   }
 
   if (!tex->isOwningVkImage_) {
@@ -10317,9 +10337,15 @@ VkAccessFlags2 tensorAccessFlagsForStages(VkPipelineStageFlags2 stages) {
 
 lvk::TensorHandle lvk::VulkanContext::createTensor(const VkTensorDescriptionARM& description,
                                                    VkMemoryPropertyFlags memFlags,
+                                                   BufferHandle aliasBuffer,
+                                                   uint64_t aliasOffset,
+                                                   TextureHandle aliasTexture,
                                                    const char* debugName,
                                                    Result* outResult) {
   LVK_PROFILER_FUNCTION_COLOR(LVK_PROFILER_COLOR_CREATE);
+
+  const uint32_t bytesPerPixel = lvk::getBytesPerPixel(description.format);
+  const lvk::VulkanBuffer* aliasedBuf = buffersPool_.get(aliasBuffer);
 
   VulkanTensor tensor = {
       .vkFormat_ = description.format,
@@ -10327,9 +10353,14 @@ lvk::TensorHandle lvk::VulkanContext::createTensor(const VkTensorDescriptionARM&
       .vkUsageFlags_ = description.usage,
       .vkMemFlags_ = memFlags,
       .rank_ = description.dimensionCount,
-      .elementSize_ = lvk::getBytesPerPixel(description.format),
+      .dataSize_ = bytesPerPixel,
+      .elementSize_ = bytesPerPixel,
+      .mappedPtr_ = aliasedBuf && aliasedBuf->mappedPtr_ ? aliasedBuf->getMappedPtr() + aliasOffset : nullptr,
+      .isCoherentMemory_ = aliasedBuf && aliasedBuf->isCoherentMemory_,
+      .aliasTexture_ = aliasTexture,
+      .aliasBuffer_ = aliasBuffer,
+      .aliasBufferOffset_ = aliasOffset,
   };
-  tensor.dataSize_ = tensor.elementSize_;
   for (uint32_t i = 0; i != tensor.rank_; i++) {
     tensor.dimensions_[i] = description.pDimensions[i];
     tensor.dataSize_ *= (uint64_t)description.pDimensions[i];
@@ -10390,15 +10421,55 @@ lvk::TensorHandle lvk::VulkanContext::createTensor(const VkTensorDescriptionARM&
   const bool isHostVisible = (memFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) != 0;
   const bool useVma = LVK_VULKAN_USE_VMA && !dedicatedRequirements.requiresDedicatedAllocation;
 
-  if (useVma) {
-    VmaAllocationCreateInfo vmaAllocInfo = {
+  if (aliasBuffer.valid() || aliasTexture.valid()) {
+    // bind the tensor to the memory of the aliased buffer or texture (both are validated by the callers)
+    const lvk::VulkanImage* aliasedImg = texturesPool_.get(aliasTexture);
+    const VmaAllocation allocation = aliasedBuf ? aliasedBuf->vmaAllocation_ : aliasedImg->vmaAllocation_;
+    VmaAllocationInfo allocInfo = {};
+    if (allocation) {
+      vmaGetAllocationInfo((VmaAllocator)getVmaAllocator(), allocation, &allocInfo);
+    } else {
+      VkMemoryRequirements aliasedRequirements = {};
+      aliasedBuf ? vkGetBufferMemoryRequirements(vkDevice_, aliasedBuf->vkBuffer_, &aliasedRequirements)
+                 : vkGetImageMemoryRequirements(vkDevice_, aliasedImg->vkImage_, &aliasedRequirements);
+      allocInfo = {
+          .memoryType = lvk::findMemoryType(vkPhysicalDevice_, aliasedRequirements.memoryTypeBits, memFlags),
+          .deviceMemory = aliasedBuf ? aliasedBuf->vkMemory_ : aliasedImg->vkMemory_[0],
+          .size = aliasedRequirements.size,
+      };
+    }
+    const VkMemoryRequirements& req = requirements.memoryRequirements;
+    const VkDeviceSize memoryOffset = allocInfo.offset + aliasOffset;
+    const bool isIncompatibleMemory = dedicatedRequirements.requiresDedicatedAllocation ||
+                                      !(req.memoryTypeBits & (1u << allocInfo.memoryType));
+    const bool isMisaligned = !req.alignment || memoryOffset % req.alignment;
+    const bool isTooLarge = aliasOffset + req.size > (aliasedBuf ? aliasedBuf->bufferSize_ : allocInfo.size);
+    const char* error = isIncompatibleMemory ? "The aliased memory cannot back this tensor (dedicated allocation or memory type)"
+                        : isMisaligned       ? "The aliased memory offset does not satisfy the tensor alignment"
+                        : isTooLarge         ? "The tensor does not fit into the aliased memory"
+                                             : nullptr;
+    if (!LVK_VERIFY(!error)) {
+      LLOGW("Tensor `%s`: %s (offset %llu, size %llu, alignment %llu)\n",
+            debugName ? debugName : "",
+            error,
+            (unsigned long long)memoryOffset,
+            (unsigned long long)req.size,
+            (unsigned long long)req.alignment);
+      vkDestroyTensorARM(vkDevice_, tensor.vkTensor_, nullptr);
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, error);
+      return {};
+    }
+    tensor.vkMemory_ = allocInfo.deviceMemory;
+    tensor.vkMemoryOffset_ = memoryOffset;
+  } else if (useVma) {
+    const VmaAllocationCreateInfo vmaAllocInfo = {
+        .flags = isHostVisible ? VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
+                               : VmaAllocationCreateFlags{0},
         .usage = VMA_MEMORY_USAGE_UNKNOWN,
         .requiredFlags = memFlags,
+        .preferredFlags = isHostVisible ? VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT
+                                        : VkMemoryPropertyFlags{0},
     };
-    if (isHostVisible) {
-      vmaAllocInfo.flags = VMA_ALLOCATION_CREATE_MAPPED_BIT | VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT;
-      vmaAllocInfo.preferredFlags = VK_MEMORY_PROPERTY_HOST_COHERENT_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT;
-    }
     VmaAllocationInfo allocInfo = {};
     const VkResult allocResult = vmaAllocateMemory(
         (VmaAllocator)getVmaAllocator(), &requirements.memoryRequirements, &vmaAllocInfo, &tensor.vmaAllocation_, &allocInfo);
@@ -10476,6 +10547,63 @@ lvk::TensorHandle lvk::VulkanContext::createTensor(const VkTensorDescriptionARM&
 }
 
 lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensor(const TensorDesc& desc, const char* debugName, Result* outResult) {
+  return createTensorImpl(desc, {}, 0, {}, debugName, outResult);
+}
+
+lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensorBufferAliasing(BufferHandle buffer,
+                                                                              uint64_t bufferOffset,
+                                                                              const TensorDesc& desc,
+                                                                              const char* debugName,
+                                                                              Result* outResult) {
+  const lvk::VulkanBuffer* buf = buffersPool_.get(buffer);
+  if (!LVK_VERIFY(buf && buf->vkBuffer_)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Invalid buffer to alias the tensor");
+    return {};
+  }
+  // buffer memory has no tiling, and it is host-visible whenever the buffer is
+  TensorDesc aliasDesc = desc;
+  aliasDesc.tiling = TensorTiling_Linear;
+  aliasDesc.storage = (buf->vkMemFlags_ & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT) ? StorageType_HostVisible : StorageType_Device;
+  return createTensorImpl(aliasDesc, buffer, bufferOffset, {}, debugName, outResult);
+}
+
+lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensorTextureAliasing(TextureHandle texture,
+                                                                               const TensorDesc& desc,
+                                                                               const char* debugName,
+                                                                               Result* outResult) {
+  const lvk::VulkanImage* img = texturesPool_.get(texture);
+  if (!LVK_VERIFY(img && img->vkImage_ && img->isOwningVkImage_ && (img->vkUsageFlags_ & VK_IMAGE_USAGE_TENSOR_ALIASING_BIT_ARM))) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "The texture needs TextureUsageBits_TensorAliasing");
+    return {};
+  }
+  if (!LVK_VERIFY(img->vkType_ == VK_IMAGE_TYPE_2D && img->numLevels_ == 1 && img->numLayers_ == 1 &&
+                  img->vkSamples_ == VK_SAMPLE_COUNT_1_BIT)) {
+    Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "Only single-level 2D textures can be aliased by tensors");
+    return {};
+  }
+  if (desc.rank == 4) {
+    const uint32_t elementSize = lvk::getBytesPerPixel(lvk::formatToVkFormat(desc.format));
+    const uint32_t numComponents = elementSize ? lvk::getBytesPerPixel(img->vkImageFormat_) / elementSize : 0;
+    const bool isMatching = desc.dimensions[0] == 1 && desc.dimensions[1] == (int64_t)img->vkExtent_.height &&
+                            desc.dimensions[2] == (int64_t)img->vkExtent_.width && desc.dimensions[3] == (int64_t)numComponents;
+    if (!LVK_VERIFY(isMatching)) {
+      Result::setResult(outResult, Result::Code::ArgumentOutOfRange, "The texture size and format do not match the [1, H, W, C] tensor");
+      return {};
+    }
+  }
+  TensorDesc aliasDesc = desc;
+  aliasDesc.tiling = TensorTiling_Optimal;
+  aliasDesc.usage |= TensorUsageBits_ImageAliasing;
+  aliasDesc.storage = StorageType_Device;
+  return createTensorImpl(aliasDesc, {}, 0, texture, debugName, outResult);
+}
+
+lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensorImpl(const TensorDesc& desc,
+                                                                    BufferHandle aliasBuffer,
+                                                                    uint64_t aliasOffset,
+                                                                    TextureHandle aliasTexture,
+                                                                    const char* debugName,
+                                                                    Result* outResult) {
   if (!LVK_VERIFY(has_ARM_tensors_)) {
     Result::setResult(outResult, Result::Code::RuntimeError, "VK_ARM_tensors is not supported (see supportsTensorsARM())");
     return {};
@@ -10555,7 +10683,8 @@ lvk::Holder<lvk::TensorHandle> lvk::VulkanContext::createTensor(const TensorDesc
   const char* name = debugName ? debugName : desc.debugName;
 
   Result result;
-  const TensorHandle handle = createTensor(description, storageTypeToVkMemoryPropertyFlags(desc.storage), name, &result);
+  const TensorHandle handle =
+      createTensor(description, storageTypeToVkMemoryPropertyFlags(desc.storage), aliasBuffer, aliasOffset, aliasTexture, name, &result);
 
   if (!result.isOk()) {
     Result::setResult(outResult, result);
@@ -10595,18 +10724,21 @@ void lvk::VulkanContext::destroy(lvk::TensorHandle handle) {
         [device = vkDevice_, view = tensor->vkTensorView_]() { vkDestroyTensorViewARM(device, view, nullptr); }));
   }
 
-  if (tensor->vmaAllocation_) {
+  if (tensor->aliasBuffer_.valid() || tensor->aliasTexture_.valid()) {
+    deferredTask(
+        std::packaged_task<void()>([device = vkDevice_, tensor = tensor->vkTensor_]() { vkDestroyTensorARM(device, tensor, nullptr); }));
+  } else if (tensor->vmaAllocation_) {
     deferredTask(std::packaged_task<void()>(
-        [device = vkDevice_, vma = getVmaAllocator(), tensorARM = tensor->vkTensor_, allocation = tensor->vmaAllocation_]() {
-          vkDestroyTensorARM(device, tensorARM, nullptr);
+        [device = vkDevice_, vma = getVmaAllocator(), tensor = tensor->vkTensor_, allocation = tensor->vmaAllocation_]() {
+          vkDestroyTensorARM(device, tensor, nullptr);
           vmaFreeMemory((VmaAllocator)vma, allocation);
         }));
   } else {
     if (tensor->mappedPtr_) {
       vkUnmapMemory(vkDevice_, tensor->vkMemory_);
     }
-    deferredTask(std::packaged_task<void()>([device = vkDevice_, tensorARM = tensor->vkTensor_, memory = tensor->vkMemory_]() {
-      vkDestroyTensorARM(device, tensorARM, nullptr);
+    deferredTask(std::packaged_task<void()>([device = vkDevice_, tensor = tensor->vkTensor_, memory = tensor->vkMemory_]() {
+      vkDestroyTensorARM(device, tensor, nullptr);
       vkFreeMemory(device, memory, nullptr);
     }));
   }
@@ -10635,7 +10767,9 @@ lvk::Result lvk::VulkanContext::upload(lvk::TensorHandle handle, const void* dat
     LVK_ASSERT(tensor->isLinear());
     copyTensorDataStrided(tensor->mappedPtr_, const_cast<void*>(data), *tensor, offset, size, true);
     if (!tensor->isCoherentMemory_) {
-      if (tensor->vmaAllocation_) {
+      if (const lvk::VulkanBuffer* buf = buffersPool_.get(tensor->aliasBuffer_)) {
+        buf->flushMappedMemory(*this, tensor->aliasBufferOffset_, tensor->strides_[0] * tensor->dimensions_[0]);
+      } else if (tensor->vmaAllocation_) {
         vmaFlushAllocation((VmaAllocator)getVmaAllocator(), tensor->vmaAllocation_, 0, VK_WHOLE_SIZE);
       } else {
         const VkMappedMemoryRange range = {
@@ -10668,7 +10802,7 @@ lvk::Result lvk::VulkanContext::upload(lvk::TensorHandle handle, const void* dat
   };
   Result result;
   const TensorHandle staging = createTensor(
-      stagingDescription, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, "Staging tensor", &result);
+      stagingDescription, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, {}, 0, {}, "Staging tensor", &result);
   if (!result.isOk()) {
     return result;
   }
@@ -10708,7 +10842,9 @@ lvk::Result lvk::VulkanContext::download(lvk::TensorHandle handle, void* data, s
   if (tensor->isMapped()) {
     LVK_ASSERT(tensor->isLinear());
     if (!tensor->isCoherentMemory_) {
-      if (tensor->vmaAllocation_) {
+      if (const lvk::VulkanBuffer* buf = buffersPool_.get(tensor->aliasBuffer_)) {
+        buf->invalidateMappedMemory(*this, tensor->aliasBufferOffset_, tensor->strides_[0] * tensor->dimensions_[0]);
+      } else if (tensor->vmaAllocation_) {
         vmaInvalidateAllocation((VmaAllocator)getVmaAllocator(), tensor->vmaAllocation_, 0, VK_WHOLE_SIZE);
       } else {
         const VkMappedMemoryRange range = {
@@ -10739,7 +10875,7 @@ lvk::Result lvk::VulkanContext::download(lvk::TensorHandle handle, void* data, s
   };
   Result result;
   const TensorHandle staging = createTensor(
-      stagingDescription, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, "Staging tensor", &result);
+      stagingDescription, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT, {}, 0, {}, "Staging tensor", &result);
   if (!result.isOk()) {
     return result;
   }
@@ -10801,6 +10937,8 @@ void lvk::CommandBuffer::tensorBarriers(const ldr::Span<TensorHandle>& tensors,
   std::vector<VkTensorMemoryBarrierARM> barriers;
   barriers.reserve(tensors.size());
 
+  bool aliasesBuffer = false;
+
   for (TensorHandle handle : tensors) {
     const lvk::VulkanTensor* tensor = ctx_->tensorsPool_.get(handle);
     if (!LVK_VERIFY(tensor && tensor->vkTensor_)) {
@@ -10816,6 +10954,20 @@ void lvk::CommandBuffer::tensorBarriers(const ldr::Span<TensorHandle>& tensors,
         .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
         .tensor = tensor->vkTensor_,
     });
+    aliasesBuffer = aliasesBuffer || tensor->aliasBuffer_.valid();
+    // tensors access the memory of an aliased texture in its own layout
+    const lvk::VulkanImage* img = ctx_->texturesPool_.get(tensor->aliasTexture_);
+    if (img && img->vkImageLayout_ != VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM) {
+      img->transitionLayout(wrapper_->cmdBuf_,
+                            VK_IMAGE_LAYOUT_TENSOR_ALIASING_ARM,
+                            VkImageSubresourceRange{
+                                .aspectMask = img->getImageAspectFlags(),
+                                .levelCount = VK_REMAINING_MIP_LEVELS,
+                                .layerCount = VK_REMAINING_ARRAY_LAYERS,
+                            },
+                            {},
+                            computeOnlyQueue);
+    }
   }
 
   if (barriers.empty()) {
@@ -10827,9 +10979,19 @@ void lvk::CommandBuffer::tensorBarriers(const ldr::Span<TensorHandle>& tensors,
       .tensorMemoryBarrierCount = (uint32_t)barriers.size(),
       .pTensorMemoryBarriers = barriers.data(),
   };
+  // tensor barriers do not cover accesses to the same memory through an aliased buffer
+  const VkMemoryBarrier2 aliasBarrier = {
+      .sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER_2,
+      .srcStageMask = srcStage,
+      .srcAccessMask = tensorAccessFlagsForStages(srcStage),
+      .dstStageMask = dstStage,
+      .dstAccessMask = tensorAccessFlagsForStages(dstStage),
+  };
   const VkDependencyInfo dependencyInfo = {
       .sType = VK_STRUCTURE_TYPE_DEPENDENCY_INFO,
       .pNext = &tensorDependencyInfo,
+      .memoryBarrierCount = aliasesBuffer ? 1u : 0u,
+      .pMemoryBarriers = &aliasBarrier,
   };
   vkCmdPipelineBarrier2(wrapper_->cmdBuf_, &dependencyInfo);
 }

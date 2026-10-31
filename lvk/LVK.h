@@ -960,6 +960,7 @@ enum TextureUsageBits : uint8_t {
   TextureUsageBits_InputAttachment = 1 << 3,
   TextureUsageBits_FragmentDensityMap = 1 << 4,
   TextureUsageBits_ShadingRateAttachment = 1 << 5,
+  TextureUsageBits_TensorAliasing = 1 << 6,
 };
 
 using TextureUsageFlags = uint8_t;
@@ -1417,6 +1418,15 @@ class IContext {
   [[nodiscard]] virtual Holder<TensorHandle> createTensor(const TensorDesc& desc,
                                                           const char* debugName = nullptr,
                                                           Result* outResult = nullptr) = 0;
+  [[nodiscard]] virtual Holder<TensorHandle> createTensorBufferAliasing(BufferHandle buffer,
+                                                                        uint64_t bufferOffset,
+                                                                        const TensorDesc& desc,
+                                                                        const char* debugName = nullptr,
+                                                                        Result* outResult = nullptr) = 0;
+  [[nodiscard]] virtual Holder<TensorHandle> createTensorTextureAliasing(TextureHandle texture,
+                                                                         const TensorDesc& desc,
+                                                                         const char* debugName = nullptr,
+                                                                         Result* outResult = nullptr) = 0;
 
   virtual void destroy(ComputePipelineHandle handle) = 0;
   virtual void destroy(RenderPipelineHandle handle) = 0;

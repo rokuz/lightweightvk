@@ -428,6 +428,10 @@ struct VulkanTensor final {
   uint32_t elementSize_ = 0;
   void* mappedPtr_ = nullptr;
   bool isCoherentMemory_ = false;
+  // the tensor is bound to the memory of one of these and does not own it
+  TextureHandle aliasTexture_;
+  BufferHandle aliasBuffer_;
+  uint64_t aliasBufferOffset_ = 0;
 };
 
 class CommandBuffer final : public ICommandBuffer {
@@ -661,6 +665,15 @@ class VulkanContext final : public IContext {
 
   Holder<AccelStructHandle> createAccelerationStructure(const AccelStructDesc& desc, Result* outResult) override;
   Holder<TensorHandle> createTensor(const TensorDesc& desc, const char* debugName, Result* outResult) override;
+  Holder<TensorHandle> createTensorBufferAliasing(BufferHandle buffer,
+                                                  uint64_t bufferOffset,
+                                                  const TensorDesc& desc,
+                                                  const char* debugName,
+                                                  Result* outResult) override;
+  Holder<TensorHandle> createTensorTextureAliasing(TextureHandle texture,
+                                                   const TensorDesc& desc,
+                                                   const char* debugName,
+                                                   Result* outResult) override;
 
   void destroy(ComputePipelineHandle handle) override;
   void destroy(RenderPipelineHandle handle) override;
@@ -847,6 +860,12 @@ class VulkanContext final : public IContext {
   void waitDeferredTasks();
   void generateMipmap(TextureHandle handle) const;
   lvk::Result growDescriptorPool(VulkanContext::DescriptorSet& dset, uint32_t maxTextures, uint32_t maxSamplers, uint32_t maxAccelStructs);
+  Holder<TensorHandle> createTensorImpl(const TensorDesc& desc,
+                                        BufferHandle aliasBuffer,
+                                        uint64_t aliasOffset,
+                                        TextureHandle aliasTexture,
+                                        const char* debugName,
+                                        Result* outResult);
   ShaderModuleState createShaderModuleFromSPIRV(const void* spirv, size_t numBytes, const char* debugName, Result* outResult) const;
   ShaderModuleState createShaderModuleFromGLSL(ShaderStage stage,
                                                const char* source,
@@ -880,6 +899,9 @@ class VulkanContext final : public IContext {
   void createDummyTLAS();
   TensorHandle createTensor(const VkTensorDescriptionARM& description,
                             VkMemoryPropertyFlags memFlags,
+                            BufferHandle aliasBuffer,
+                            uint64_t aliasOffset,
+                            TextureHandle aliasTexture,
                             const char* debugName,
                             Result* outResult);
 
