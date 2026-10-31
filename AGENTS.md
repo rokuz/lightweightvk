@@ -134,6 +134,12 @@ To check CI status: `gh run list` or `gh run view <run-id>`.
 - **Use `const` on local variables whenever possible**
 - **NEVER use `auto` except for lambda types** — always use explicit types
 - **NEVER use `goto`**
+- `debugName` is the second-to-last function parameter, `outResult` the last
+- Name functions object-first: `createTensorBufferAliasing()`, not `createBufferAliasingTensor()`
+- No new STL headers
+- Fill structs with one `const` designated initializer, using ternaries for conditional fields; don't patch fields afterwards
+- Name compound conditions: `const bool isMisaligned = ...`
+- No vendor suffixes in local names: `tensor`, not `tensorARM`
 
 ## Commit Conventions
 - Start with capital letter, no trailing period
