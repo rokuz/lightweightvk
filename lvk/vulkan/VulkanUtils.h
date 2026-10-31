@@ -85,6 +85,10 @@ VkFence createFence(VkDevice device, const char* debugName, bool isSignaled = fa
 VmaAllocator createVmaAllocator(VkPhysicalDevice physDev, VkDevice device, VkInstance instance, uint32_t apiVersion);
 uint32_t findQueueFamilyIndex(VkPhysicalDevice physDev, VkQueueFlags flags);
 VkResult setDebugObjectName(VkDevice device, VkObjectType type, uint64_t handle, const char* name);
+uint32_t findMemoryType(VkPhysicalDevice physDev,
+                        uint32_t memoryTypeBits,
+                        VkMemoryPropertyFlags flags,
+                        VkMemoryPropertyFlags* outMemoryProperties = nullptr);
 VkResult allocateMemory2(VkPhysicalDevice physDev,
                          VkDevice device,
                          const VkMemoryRequirements2* memRequirements,
